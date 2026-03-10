@@ -174,8 +174,7 @@ class AcceptService : Service() {
     }
 
     /**
-     * [수정 포인트] 전송 결과에 따른 파일 처리 분리
-     * 이유: 이전에는 전송 시도와 동시에 파일을 삭제/이동하여 실패 시 데이터 유실 위험이 있었음
+     * 30분 단위 파일 병합 및 서버 전송
      */
     private fun sendCSV() {
         val downloadBasePath = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
@@ -187,15 +186,22 @@ class AcceptService : Service() {
             if (!sendedDir.exists()) sendedDir.mkdirs()
             if (!sensorDir.exists()) continue
 
-            // 1. 원본 파일만 필터링 (기존 로직 유지)
+            // 1. 원본 파일만 필터링 (이미 병합된 형식 제외)
             val allFiles = sensorDir.listFiles()?.filter { file ->
                 file.name.endsWith(".csv") && 
                 file.name.contains(sensor.value) && 
                 !file.name.matches(Regex("^\\d{8}_\\d{4}_.*"))
             } ?: continue
 
-            // 2. 30분 단위 그룹화 (기존 로직 유지)
-            val groupedFiles = allFiles.groupBy { /* ... 생략 (이전과 동일) ... */ }
+            // 2. 30분 단위 그룹화
+            val groupedFiles = allFiles.groupBy { file ->
+                val timestamp = file.name.split("_").getOrNull(1)?.split(".")?.get(0)?.toLongOrNull() ?: 0L
+                val cal = Calendar.getInstance().apply { time = Date(timestamp * 1000) }
+                val block = if (cal.get(Calendar.MINUTE) < 30) "00" else "30"
+                String.format("%04d%02d%02d_%02d%s", 
+                    cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, 
+                    cal.get(Calendar.DAY_OF_MONTH), cal.get(Calendar.HOUR_OF_DAY), block)
+            }
 
             for ((blockTime, files) in groupedFiles) {
                 if (files.isEmpty()) continue
@@ -205,7 +211,7 @@ class AcceptService : Service() {
                 val tempFile = File(sensorDir, "${mergedFileName}.tmp")
 
                 try {
-                    // 3. 병합 (안전 보강 버전 유지)
+                    // 3. 병합 (임시 파일 거친 후 최종 생성)
                     if (!mergedFile.exists()) {
                         tempFile.bufferedWriter().use { writer ->
                             val sortedFiles = files.sortedBy { it.name }
@@ -226,22 +232,26 @@ class AcceptService : Service() {
                         SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).parse(blockTime)?.time?.div(1000) ?: 0L
                     } catch (e: Exception) { 0L }
 
-                    // [수정 포인트] 콜백 블록 { isSuccess -> ... } 추가
-                    // 이유: 서버 응답이 올 때까지 기다렸다가 비동기로 결과를 처리하기 위함
-                    ServerConnection.postFile(mergedFile, DeviceInfo._uID, DeviceInfo._battery, epochTime.toString()) { isSuccess ->
-                        if (isSuccess) {
-                            // 전송 성공 시에만 로컬 데이터 정리
-                            files.forEach { it.delete() }
-                            mergedFile.renameTo(File(sendedDir, mergedFileName))
-                            Log.d(tag, "$mergedFileName 전송 및 정리 완료")
-                        } else {
-                            // 전송 실패 시 파일 보존
-                            Log.e(tag, "전송 실패로 파일을 로컬에 보존합니다: $mergedFileName")
+                    // [핵심 수정] 인자 이름을 명시적으로 지정하여 Type mismatch 에러 해결
+                    ServerConnection.postFile(
+                        file = mergedFile,
+                        userID = DeviceInfo._uID,
+                        battery = DeviceInfo._battery,
+                        timestamp = epochTime.toString(),
+                        onResult = { isSuccess ->
+                            if (isSuccess) {
+                                // 전송 성공 시에만 로컬 데이터 정리
+                                files.forEach { it.delete() }
+                                mergedFile.renameTo(File(sendedDir, mergedFileName))
+                                Log.d(tag, "$mergedFileName 전송 및 정리 완료")
+                            } else {
+                                // 전송 실패 시 파일 보존
+                                Log.e(tag, "전송 실패로 파일을 로컬에 보존합니다: $mergedFileName")
+                            }
+                            // 공통 처리: 배터리 기록 등
+                            recordBatteryLevel(DeviceInfo._battery.toIntOrNull() ?: 0)
                         }
-                        
-                        // 공통 처리: 배터리 기록 등
-                        recordBatteryLevel(DeviceInfo._battery.toIntOrNull() ?: 0)
-                    }
+                    )
 
                 } catch (e: Exception) {
                     Log.e(tag, "작업 중 오류: ${e.message}")
@@ -258,14 +268,26 @@ class AcceptService : Service() {
             FileWriter(logFile, true).use { it.appendLine("Battery Level: $batteryLevel% at ${Date()}") }
 
             if (batteryLevel <= 10) {
-                val vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator.vibrate(VibrationEffect.createOneShot(2500, VibrationEffect.DEFAULT_AMPLITUDE))
-                } else {
-                    vibrator.vibrate(2500)
+                // UI 작업은 메인 스레드에서 실행되도록 보장
+                Handler(Looper.getMainLooper()).post {
+                    val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager
+                        vibratorManager.defaultVibrator
+                    } else {
+                        @Suppress("DEPRECATION")
+                        getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                    }
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vibrator.vibrate(VibrationEffect.createOneShot(2500, VibrationEffect.DEFAULT_AMPLITUDE))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator.vibrate(2500)
+                    }
+                    
+                    Toast.makeText(this, "배터리가 부족합니다. 충전해주세요.", Toast.LENGTH_SHORT).show()
                 }
-                Toast.makeText(this, "배터리가 부족합니다. 충전해주세요.", Toast.LENGTH_SHORT).show()
-                
+
                 Handler(Looper.getMainLooper()).postDelayed({
                     Toast.makeText(this, "워치를 재착용하고 측정을 재시작 해주세요.", Toast.LENGTH_LONG).show()
                 }, 90 * 60 * 1000)

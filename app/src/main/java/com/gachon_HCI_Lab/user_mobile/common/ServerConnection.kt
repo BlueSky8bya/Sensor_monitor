@@ -1,19 +1,84 @@
 package com.gachon_HCI_Lab.user_mobile.common
 
+import android.app.Activity
+import android.content.Intent
 import android.os.Environment
 import android.util.Log
+import com.gachon_HCI_Lab.user_mobile.activity.SensorActivity
 import okhttp3.*
 import java.io.*
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 abstract class ServerConnection {
     companion object {
         private val tag = "Server Connection"
         private val requestUrl = "http://114.70.120.121:443/forUser/postCurrentData/"
+        // [중요] 로그인 주소가 반드시 정의되어 있어야 합니다.
+        private val loginURL = "http://114.70.120.121:443/forUser/registUser/"
+
+        // 클라이언트를 싱글톤으로 관리 (메모리 효율)
+        private val client = OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build()
 
         /**
-         * [수정 포인트] 콜백(onResult) 추가
-         * 이유: 비동기 전송 성공 여부를 호출부(Service)에 알려주어 파일 삭제 여부를 결정하기 위함
+         * [login] LoginActivity에서 호출하는 함수
+         */
+        fun login(authcode: String, deviceID: String = "123456", regID: String = "1234567", context: Activity) {
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+            val strDate: String = dateFormat.format(Date())
+
+            val httpBuilder = HttpUrl.parse(loginURL)?.newBuilder()?.apply {
+                addQueryParameter("userID", authcode)
+                addQueryParameter("deviceID", deviceID)
+                addQueryParameter("regID", regID)
+                addQueryParameter("timestamp", strDate)
+            }
+
+            if (httpBuilder == null) {
+                Log.e(tag, "URL 생성 실패")
+                return
+            }
+
+            val request = Request.Builder()
+                .url(httpBuilder.build())
+                .build()
+
+            client.newCall(request).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    Log.e(tag, "Login 실패: ${e.message}")
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        android.widget.Toast.makeText(context, "네트워크 연결 실패", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (response.code() == 200) {
+                        Log.d(tag, "Login 성공")
+                        CacheManager.saveCacheFile(context, authcode, "login.txt")
+
+                        val intent = Intent(context, SensorActivity::class.java).apply {
+                            putExtra("ID", authcode)
+                        }
+                        context.startActivity(intent)
+                        context.finish()
+                    } else {
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            android.widget.Toast.makeText(context, "로그인 실패 (코드: ${response.code()})", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    response.close()
+                }
+            })
+        }
+
+        /**
+         * [postFile] AcceptService에서 호출하는 함수
          */
         fun postFile(file: File, userID: String, battery: String, timestamp: String, onResult: (Boolean) -> Unit) {
             val requestBody = MultipartBody.Builder()
@@ -25,32 +90,23 @@ abstract class ServerConnection {
                 .build()
 
             val request = Request.Builder().url(requestUrl).post(requestBody).build()
-            
-            // OkHttpClient를 매번 생성하지 않고 재사용하는 것이 좋지만, 기존 구조 유지를 위해 유지함
-            val client = OkHttpClient()
 
             client.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
-                    val errorMessage = "Network Error at ${Date()}: ${e.message}"
+                    val errorMessage = "Network Error: ${e.message}"
                     Log.e(tag, errorMessage)
                     saveErrorLog(errorMessage)
-                    onResult(false) // 실패 알림
+                    onResult(false)
                 }
 
                 override fun onResponse(call: Call, response: Response) {
-                    // [수정 포인트] response.isSuccessful 체크
-                    // 이유: 서버가 404나 500을 응답해도 onResponse가 호출되므로 실제 성공 여부를 확인해야 함
                     if (response.isSuccessful) {
                         Log.d(tag, "전송 성공: ${response.code()}")
-                        onResult(true) // 성공 알림
+                        onResult(true)
                     } else {
-                        val errorMsg = "Server Error (${response.code()}): ${response.message()}"
-                        Log.e(tag, errorMsg)
-                        saveErrorLog(errorMsg)
-                        onResult(false) // 실패 알림
+                        saveErrorLog("Server Error: ${response.code()}")
+                        onResult(false)
                     }
-                    // [수정 포인트] response.close()
-                    // 이유: 스트림을 닫지 않으면 메모리 누수 및 소켓 부족 현상이 발생할 수 있음
                     response.close()
                 }
             })
