@@ -26,10 +26,6 @@ import androidx.core.app.NotificationCompat
 import com.gachon_HCI_Lab.user_mobile.R
 import com.gachon_HCI_Lab.user_mobile.activity.SensorActivity
 import com.gachon_HCI_Lab.user_mobile.common.BTManager
-import com.gachon_HCI_Lab.user_mobile.common.CsvController.getExistFileName
-import com.gachon_HCI_Lab.user_mobile.common.CsvController.getExternalPath
-import com.gachon_HCI_Lab.user_mobile.common.CsvController.getFile
-import com.gachon_HCI_Lab.user_mobile.common.CsvController.moveFile
 import com.gachon_HCI_Lab.user_mobile.common.DeviceInfo
 import com.gachon_HCI_Lab.user_mobile.common.ServerConnection
 import com.gachon_HCI_Lab.user_mobile.common.ServerConnection.Companion.saveErrorLog
@@ -58,9 +54,8 @@ import java.util.TimerTask
 
 /**
  * 포그라운드 서비스
- * 웨어러블을 통해 수집된 데이터를 폰을 통해 수집
- * 백그라운드에서 수집 + csv 생성 + 서버로 csv 전송
- * */
+ * 웨어러블을 통해 수집된 데이터를 폰을 통해 수집 및 서버 전송
+ */
 class AcceptService : Service() {
     private lateinit var bluetoothManager: BluetoothManager
     private lateinit var bluetoothAdapter: BluetoothAdapter
@@ -69,40 +64,28 @@ class AcceptService : Service() {
     private var timer: Timer? = null
     private lateinit var bluetoothStateReceiver: BluetoothStateReceiver
 
-    //From Sending Service
-    private val tag = "Sending Service"
+    private val tag = "AcceptService"
     private var isConnected: Boolean = false
 
-    override fun onBind(p0: Intent?): IBinder? {
-        TODO("Not yet implemented")
-    }
+    override fun onBind(p0: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
 
-        // 블루투스를 지원하지 않는 경우
         if (!isBluetoothSupport(bluetoothAdapter)) {
-            onDestroy()
+            stopSelf()
+            return START_NOT_STICKY
         }
 
-        // Bluetooth 비활성화 상태인 경우
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             if (!bluetoothAdapter.isEnabled) {
-                Toast.makeText(this@AcceptService, "블루투스를 활성화해주세요", Toast.LENGTH_SHORT).show()
-                onDestroy()
-                return START_NOT_STICKY
-            }
-            if (!pairingBluetoothConnected()) {
-                Toast.makeText(this@AcceptService, "기기를 연결해주세요", Toast.LENGTH_SHORT).show()
-                onDestroy()
+                Toast.makeText(this, "블루투스를 활성화해주세요", Toast.LENGTH_SHORT).show()
+                stopSelf()
                 return START_NOT_STICKY
             }
         }
+        
         setForeground()
         startForeground()
 
@@ -117,150 +100,72 @@ class AcceptService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(bluetoothStateReceiver)
-        if (::acceptThread.isInitialized) {
-            acceptThread.clear()
-        }
-        Log.d("Accept Service", "onDestroy")
-        if (timer != null) {
-            timer?.cancel()
-            timer = null
-        }
+        if (::acceptThread.isInitialized) acceptThread.clear()
+        timer?.cancel()
+        timer = null
+        
         EventBus.getDefault().post(SocketStateEvent(SocketState.CLOSE))
-
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
         if (EventBus.getDefault().isRegistered(this)) EventBus.getDefault().unregister(this)
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     private fun startForeground() {
         BluetoothConnect.createBluetoothAdapter(bluetoothAdapter)
         acceptThread = AcceptThread(this)
-        createEventBus()
+        if (!EventBus.getDefault().isRegistered(this)) EventBus.getDefault().register(this)
         acceptThread.start()
     }
 
-    private fun createEventBus(){
-        if (!EventBus.getDefault().isRegistered(this))
-            EventBus.getDefault().register(this)
-    }
-
     private fun setForeground() {
-        Log.d("setForegroundNotification", "notification")
         val channelId = "com.user_mobile.AcceptService"
-        val channelName = "accept data service channel"
+        val channelName = "Sensor Data Service"
         if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel(
-                channelId, channelName,
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
+            val channel = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_DEFAULT)
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
 
-        val notificationIntent = Intent(this, SensorActivity::class.java)
-        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            PendingIntent.getActivity(
-                this,
-                0,
-                notificationIntent,
-                PendingIntent.FLAG_MUTABLE
-            )
-        } else {
-            PendingIntent.getActivity(
-                this,
-                0,
-                notificationIntent,
-                PendingIntent.FLAG_IMMUTABLE
-            )
+        val notificationIntent = Intent(this, SensorActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
+        
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, notificationIntent,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
+        )
 
-        val notification = NotificationCompat.Builder(this, channelId).apply {
-            setContentTitle("Asan Service")
-            setContentText("센서 데이터 감지중 입니다")
-            setSmallIcon(R.mipmap.ic_launcher)
-            setContentIntent(pendingIntent)
-        }
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Asan Service")
+            .setContentText("센서 데이터 감지 중입니다")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(pendingIntent)
+            .build()
 
-        val notificationID = 1
-        startForeground(notificationID, notification.build())
+        startForeground(1, notification)
     }
 
-    /**
-     * 블루투스 지원 여부 판별 메소드
-     * */
-    private fun isBluetoothSupport(bluetoothAdapter: BluetoothAdapter): Boolean {
-        return if (bluetoothAdapter == null) {
-            Toast.makeText(this, "Bluetooth 지원을 하지 않는 기기입니다.", Toast.LENGTH_SHORT).show()
-            false
-        } else true
-    }
-
-    /**
-     * 블루투스 연결 여부 판별 메소드
-     * */
-    private fun isConnected(device: BluetoothDevice): Boolean {
-        return try {
-            val method: Method = device.javaClass.getMethod("isConnected")
-            val connected: Boolean = method.invoke(device) as Boolean
-            connected
-        } catch (e: Exception) {
-            throw IllegalStateException(e)
+    private fun isBluetoothSupport(adapter: BluetoothAdapter?): Boolean {
+        if (adapter == null) {
+            Toast.makeText(this, "Bluetooth를 지원하지 않는 기기입니다.", Toast.LENGTH_SHORT).show()
+            return false
         }
+        return true
     }
-
-    /**
-     * 페어링 된 기기와 연결 확인 메소드
-     * */
-    private fun pairingBluetoothConnected(): Boolean {
-        try {
-            if (ActivityCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                val bluetoothDevices: Set<BluetoothDevice> =
-                    bluetoothAdapter.bondedDevices
-                for (bluetoothDevice in bluetoothDevices) {
-                    if (isConnected(bluetoothDevice)) {
-                        // 연결 중이 아닌 상태
-                        return true
-                    }
-                }
-            }
-        } catch (e: NullPointerException) {
-            // 블루투스 서비스 사용 불가인 경우 처리
-        }
-        return false
-    }
-
-    /**
-     * csv를 작성하는 메소드
-     * 타이머가 있어 입력받은 시간마다 동작
-     * count는 주기를 의미
-     * 주기마다 csv를 서버로 전송하는 메소드인 sendCSV 호출
-     * input: 시간(단위: unixTime)
-     * ex) csvWrite(60000) -> 1분마다 동작
-     * */
 
     private fun csvWrite(time: Long) {
+        if (timer != null) return
         var count = 0
-        if (timer != null) {
-            Log.d("Accept Service", "timer is already running")
-            return
-        }
         timer = Timer()
         timer?.schedule(object : TimerTask() {
             override fun run() {
-                Log.d("Accept Service", "CSV Write method called")
                 CoroutineScope(Dispatchers.IO).launch {
                     if (isConnected) {
                         sensorController.writeCsv(this@AcceptService, "OneAxis")
                         sensorController.writeCsv(this@AcceptService, "ThreeAxis")
                         count++
-                        if (count == 6) {
+                        if (count >= 6) { // 5분 * 6 = 30분
                             sendCSV()
-                            count %= 6
+                            count = 0
                         }
                     }
                 }
@@ -268,41 +173,9 @@ class AcceptService : Service() {
         }, 0, time)
     }
 
-
-    //From Sending Service
     /**
-     * CSV를 서버로 전송하는 메소드
-     * */
-//    private fun sendCSV() {
-//
-//        for (sensorName in SensorEnum.values()) {
-//            val fileName = getExistFileName(this, sensorName.value) ?: continue
-//
-//            val srcPath = getExternalPath(this, "sensor") + "/" + fileName
-//            val destPath = getExternalPath(this, "sensor/sended") + "/" + fileName
-//
-//            moveFile(srcPath, destPath)
-//            val srcFile = getFile(srcPath)
-//            srcFile?.delete()
-//
-//            val file = getFile(destPath)
-//
-//            if (file != null) {
-//                val token = fileName.split('_')
-//                val ppgTime = token[1].split('.')[0]
-//
-//                ServerConnection.postFile(file, DeviceInfo._uID, DeviceInfo._battery, ppgTime, )
-//                Log.d(tag, sensorName.name + " sensor file sending!")
-//
-//                //
-//                배터리 잔량 기록
-//                val batteryLevel = DeviceInfo._battery.toIntOrNull() ?: 0
-//                recordBatteryLevel(batteryLevel)
-//            }
-//        }
-//    }
-
-
+     * 30분 단위 파일 병합 및 서버 전송
+     */
     private fun sendCSV() {
         val downloadBasePath = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
 
@@ -313,22 +186,21 @@ class AcceptService : Service() {
             if (!sendedDir.exists()) sendedDir.mkdirs()
             if (!sensorDir.exists()) continue
 
-            val allFiles = sensorDir.listFiles()?.filter {
-                it.name.endsWith(".csv") && it.name.contains(sensor.value)
+            // 1. 이미 병합된 파일(yyyyMMdd_HHmm...)을 제외한 원본 파편들만 필터링
+            val allFiles = sensorDir.listFiles()?.filter { file ->
+                file.name.endsWith(".csv") && 
+                file.name.contains(sensor.value) && 
+                !file.name.matches(Regex("^\\d{8}_\\d{4}_.*"))
             } ?: continue
 
-            // 🔸 30분 단위로 그룹화
+            // 2. 30분 블록 단위 그룹화
             val groupedFiles = allFiles.groupBy { file ->
                 val timestamp = file.name.split("_").getOrNull(1)?.split(".")?.get(0)?.toLongOrNull() ?: 0L
-                val date = Date(timestamp * 1000)
-                val cal = Calendar.getInstance().apply { time = date }
-                val year = cal.get(Calendar.YEAR)
-                val month = cal.get(Calendar.MONTH) + 1
-                val day = cal.get(Calendar.DAY_OF_MONTH)
-                val hour = cal.get(Calendar.HOUR_OF_DAY)
-                val minute = cal.get(Calendar.MINUTE)
-                val block = if (minute < 30) "00" else "30"
-                String.format("%04d%02d%02d_%02d%s", year, month, day, hour, block) // 예: 20250808_0930
+                val cal = Calendar.getInstance().apply { time = Date(timestamp * 1000) }
+                val block = if (cal.get(Calendar.MINUTE) < 30) "00" else "30"
+                String.format("%04d%02d%02d_%02d%s", 
+                    cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, 
+                    cal.get(Calendar.DAY_OF_MONTH), cal.get(Calendar.HOUR_OF_DAY), block)
             }
 
             for ((blockTime, files) in groupedFiles) {
@@ -336,119 +208,70 @@ class AcceptService : Service() {
 
                 val mergedFileName = "${blockTime}_${sensor.value}.csv"
                 val mergedFile = File(sensorDir, mergedFileName)
+                val tempFile = File(sensorDir, "${mergedFileName}.tmp")
 
                 try {
-                    // 🔹 병합 실행
-                    mergedFile.bufferedWriter().use { writer ->
-                        for (file in files.sortedBy { it.name }) {
-                            file.bufferedReader().useLines { lines ->
-                                lines.forEachIndexed { index, line ->
-                                    if (index == 0 && file != files.first()) return@forEachIndexed // 헤더 생략
-                                    writer.appendLine(line)
+                    // 3. 병합 작업 (병합된 파일이 없을 때만 수행)
+                    if (!mergedFile.exists()) {
+                        tempFile.bufferedWriter().use { writer ->
+                            val sortedFiles = files.sortedBy { it.name }
+                            for (file in sortedFiles) {
+                                file.bufferedReader().useLines { lines ->
+                                    lines.forEachIndexed { index, line ->
+                                        if (index == 0 && file != sortedFiles.first()) return@forEachIndexed
+                                        writer.appendLine(line)
+                                    }
                                 }
                             }
                         }
+                        if (!tempFile.renameTo(mergedFile)) throw IOException("임시 파일 변환 실패")
                     }
 
-                    // 🔹 서버 전송 (blockTime → epoch 변환 시도)
+                    // 4. 서버 전송
                     val epochTime = try {
-                        val sdf = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault())
-                        sdf.parse(blockTime)?.time?.div(1000) ?: 0L
-                    } catch (e: Exception) {
-                        0L
-                    }
+                        SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).parse(blockTime)?.time?.div(1000) ?: 0L
+                    } catch (e: Exception) { 0L }
 
                     ServerConnection.postFile(mergedFile, DeviceInfo._uID, DeviceInfo._battery, epochTime.toString())
-                    Log.d("sendCSV", "$mergedFileName 전송 성공")
+                    Log.d(tag, "$mergedFileName 전송 성공")
 
-                    // 🔹 병합에 사용된 원본 파일 삭제
+                    // 5. 전송 성공 후 처리: 원본 삭제 및 병합파일 이동
                     files.forEach { it.delete() }
+                    mergedFile.renameTo(File(sendedDir, mergedFileName))
 
-                    // 🔹 병합 파일을 sended로 이동
-                    val movedFile = File(sendedDir, mergedFileName)
-                    if (!mergedFile.renameTo(movedFile)) {
-                        Log.e("sendCSV", "파일 이동 실패: ${mergedFile.name}")
-                    }
-
-                    val batteryLevel = DeviceInfo._battery.toIntOrNull() ?: 0
-                    recordBatteryLevel(batteryLevel)
-
+                    recordBatteryLevel(DeviceInfo._battery.toIntOrNull() ?: 0)
                     Thread.sleep(100)
 
                 } catch (e: Exception) {
-                    Log.e("sendCSV", "전송 실패: $mergedFileName - ${e.message}")
-                    saveErrorLog("Merged File $mergedFileName Send failed at ${Date()}: ${e.message}")
+                    Log.e(tag, "전송 실패: $mergedFileName - ${e.message}")
+                    saveErrorLog("Error processing $mergedFileName: ${e.message}")
+                    if (tempFile.exists()) tempFile.delete()
                 }
             }
         }
     }
 
-//    private fun sendCSV() {
-//
-//        // 기존 로직: 센서 파일 전송
-//        for (sensorName in SensorEnum.values()) {
-//            val fileName = getExistFileName(this, sensorName.value) ?: continue
-//
-//            val srcPath = getExternalPath(this, "sensor") + "/" + fileName
-//            val destPath = getExternalPath(this, "sensor/sended") + "/" + fileName
-//
-//            moveFile(srcPath, destPath)
-//            val srcFile = getFile(srcPath)
-//            srcFile?.delete()
-//
-//            val file = getFile(destPath)
-//
-//            if (file != null) {
-//                val token = fileName.split('_')
-//                val ppgTime = token[1].split('.')[0]
-//
-//                try {
-//                    ServerConnection.postFile(file, DeviceInfo._uID, DeviceInfo._battery, ppgTime)
-//                    Log.d(tag, sensorName.name + " 센서 파일 전송 성공!")
-//                } catch (e: Exception) {
-//                    Log.e(tag, "fileName: $fileName")
-//                    saveErrorLog("File $fileName Send failed at ${Date()}: ${e.message}")
-//                }
-//
-//                // 배터리 잔량 기록
-//                val batteryLevel = DeviceInfo._battery.toIntOrNull() ?: 0
-//                recordBatteryLevel(batteryLevel)
-//            }
-//        }
-//    }
-
     private fun recordBatteryLevel(batteryLevel: Int) {
         val path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         val logFile = File(path, "battery.txt")
         try {
-            val writer = FileWriter(logFile, true)
-            writer.appendLine("Battery Level: $batteryLevel%")
-            writer.close()
+            FileWriter(logFile, true).use { it.appendLine("Battery Level: $batteryLevel% at ${Date()}") }
 
-            // 배터리 잔량이 10% 이하인 경우 알림
             if (batteryLevel <= 10) {
-                // 진동 알림
                 val vibrator = getSystemService(VIBRATOR_SERVICE) as Vibrator
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    // Android O 이상에서는 VibrationEffect를 사용
-                    val vibrationEffect = VibrationEffect.createOneShot(2500, VibrationEffect.DEFAULT_AMPLITUDE)
-                    vibrator.vibrate(vibrationEffect)
+                    vibrator.vibrate(VibrationEffect.createOneShot(2500, VibrationEffect.DEFAULT_AMPLITUDE))
                 } else {
-                    // Android O 미만에서는 기존 방식 사용
                     vibrator.vibrate(2500)
                 }
-
-                // Toast 메시지
                 Toast.makeText(this, "배터리가 부족합니다. 충전해주세요.", Toast.LENGTH_SHORT).show()
-
-                // 1시간 30분 후에 워치 재착용 및 측정 재시작 요청 메시지
-                val handler = Handler(Looper.getMainLooper())
-                handler.postDelayed({
+                
+                Handler(Looper.getMainLooper()).postDelayed({
                     Toast.makeText(this, "워치를 재착용하고 측정을 재시작 해주세요.", Toast.LENGTH_LONG).show()
-                }, 90 * 60 * 1000) // 1시간 30분 후 실행 (90분 x 60초 x 1000밀리초)
+                }, 90 * 60 * 1000)
             }
         } catch (e: IOException) {
-            Log.e(tag, "Error writing battery level: ${e.message}")
+            Log.e(tag, "Battery log error: ${e.message}")
         }
     }
 
@@ -456,12 +279,12 @@ class AcceptService : Service() {
     fun listenSocketState(event: ThreadStateEvent) {
         isConnected = when (event.state) {
             ThreadState.RUN -> {
-                Log.d(this.tag, "SOCKET_CONNECT!")
-                csvWrite(1000 * 60 * 5)
+                Log.d(tag, "SOCKET_CONNECT!")
+                csvWrite(1000 * 60 * 5) // 5분 주기
                 true
             }
             else -> {
-                Log.d(this.tag, "SOCKET_CLOSE!")
+                Log.d(tag, "SOCKET_CLOSE!")
                 false
             }
         }
