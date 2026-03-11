@@ -186,11 +186,11 @@ class AcceptService : Service() {
             if (!sendedDir.exists()) sendedDir.mkdirs()
             if (!sensorDir.exists()) continue
 
-            // 1. 원본 파일만 필터링 (이미 병합된 형식 제외)
+            // 1. 병합 대상 파편 파일들 필터링
             val allFiles = sensorDir.listFiles()?.filter { file ->
                 file.name.endsWith(".csv") && 
                 file.name.contains(sensor.value) && 
-                !file.name.matches(Regex("^\\d{8}_\\d{4}_.*"))
+                !file.name.matches(Regex("^\\d{8}_\\d{4}_.*")) // 이미 병합된 파일은 제외
             } ?: continue
 
             // 2. 30분 단위 그룹화
@@ -211,50 +211,60 @@ class AcceptService : Service() {
                 val tempFile = File(sensorDir, "${mergedFileName}.tmp")
 
                 try {
-                    // 3. 병합 (임시 파일 거친 후 최종 생성)
+                    // 3. 파일 병합 수행
                     if (!mergedFile.exists()) {
                         tempFile.bufferedWriter().use { writer ->
                             val sortedFiles = files.sortedBy { it.name }
                             for (file in sortedFiles) {
-                                file.bufferedReader().useLines { lines ->
-                                    lines.forEachIndexed { index, line ->
+                                file.bufferedReader().use { reader ->
+                                    reader.lineSequence().forEachIndexed { index, line ->
                                         if (index == 0 && file != sortedFiles.first()) return@forEachIndexed
-                                        writer.appendLine(line)
+                                        writer.write(line)
+                                        writer.newLine()
                                     }
                                 }
                             }
                         }
-                        if (!tempFile.renameTo(mergedFile)) throw IOException("Rename failed")
+                        
+                        // [공간 절약 핵심 1] 병합 성공 직후 원본 파편들 즉시 삭제
+                        if (tempFile.renameTo(mergedFile)) {
+                            files.forEach { if (it.exists()) it.delete() }
+                            Log.d(tag, "병합 완료: 원본 파편 파일 ${files.size}개 삭제됨")
+                        } else {
+                            if (tempFile.exists()) tempFile.delete()
+                            continue 
+                        }
                     }
 
-                    // 4. 서버 전송 호출
+                    // 4. 서버 전송
                     val epochTime = try {
                         SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).parse(blockTime)?.time?.div(1000) ?: 0L
                     } catch (e: Exception) { 0L }
 
-                    // [핵심 수정] 인자 이름을 명시적으로 지정하여 Type mismatch 에러 해결
-                    ServerConnection.postFile(
-                        file = mergedFile,
-                        userID = DeviceInfo._uID,
-                        battery = DeviceInfo._battery,
-                        timestamp = epochTime.toString(),
-                        onResult = { isSuccess ->
-                            if (isSuccess) {
-                                // 전송 성공 시에만 로컬 데이터 정리
-                                files.forEach { it.delete() }
-                                mergedFile.renameTo(File(sendedDir, mergedFileName))
-                                Log.d(tag, "$mergedFileName 전송 및 정리 완료")
+                    ServerConnection.postFile(mergedFile, DeviceInfo._uID, DeviceInfo._battery, epochTime.toString()) { isSuccess ->
+                        if (isSuccess) {
+                            // [공간 절약 핵심 2] 전송 성공 시 병합본을 sended로 이동 후 원본 경로에서 완벽 제거
+                            val destFile = File(sendedDir, mergedFileName)
+                            
+                            // 이동 시도, 실패 시 복사 후 삭제(확실한 제거)
+                            val moved = mergedFile.renameTo(destFile)
+                            if (!moved) {
+                                try {
+                                    mergedFile.copyTo(destFile, overwrite = true)
+                                    mergedFile.delete()
+                                    Log.d(tag, "병합 파일 강제 이동 및 삭제 완료")
+                                } catch (e: Exception) {
+                                    Log.e(tag, "파일 정리 오류: ${e.message}")
+                                }
                             } else {
-                                // 전송 실패 시 파일 보존
-                                Log.e(tag, "전송 실패로 파일을 로컬에 보존합니다: $mergedFileName")
+                                Log.d(tag, "병합 파일 sended 폴더 이동 완료")
                             }
-                            // 공통 처리: 배터리 기록 등
-                            recordBatteryLevel(DeviceInfo._battery.toIntOrNull() ?: 0)
                         }
-                    )
+                        recordBatteryLevel(DeviceInfo._battery.toIntOrNull() ?: 0)
+                    }
 
                 } catch (e: Exception) {
-                    Log.e(tag, "작업 중 오류: ${e.message}")
+                    Log.e(tag, "파일 처리 중 예외 발생: ${e.message}")
                     if (tempFile.exists()) tempFile.delete()
                 }
             }
