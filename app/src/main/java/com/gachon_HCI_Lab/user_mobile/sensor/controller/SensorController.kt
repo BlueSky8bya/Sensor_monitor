@@ -24,7 +24,7 @@ class SensorController(context: Context) {
     private val oneAxisDataService: OneAxisDataService = OneAxisDataService.getInstance(context)
     private val threeAxisDataService: ThreeAxisDataService = ThreeAxisDataService.getInstance(context)
     private val prefManager: SharePreferenceManager = SharePreferenceManager.getInstance(context)
-    private val regexManager: RegexManager = RegexManager.getInstance(context)
+    private val regexManager: RegexManager = RegexManager.getInstance()
 
     private val oneAxisList = listOf(
         SensorEnum.HEART_RATE.value,
@@ -273,7 +273,7 @@ class SensorController(context: Context) {
      * RoomDB에 저장된 센서 데이터 모두 삭제
      */
     fun deleteAll(){
-        val thread = thread(start = true) {
+        thread(start = true) {
             oneAxisDataService.deleteAll()
             threeAxisDataService.deleteAll()
         }

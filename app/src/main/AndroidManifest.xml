@@ -4,24 +4,16 @@
 
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
-    <!--
- Needed only if your app looks for Bluetooth devices.
-        You must add an attribute to this permission, or declare the
-        ACCESS_FINE_LOCATION permission, depending on the results when
-        you check location usage in your app.
-    -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!--    외부 저장소 권한-->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
@@ -48,9 +40,7 @@
             android:name=".activity.CsvPopupActivity"
             android:theme="@style/Theme.AppCompat.Dialog"
             android:exported="true" />
-<!--        <activity-->
-<!--            android:name=".activity.SendingActivity"-->
-<!--            android:exported="false" />-->
+
         <activity android:name=".activity.MainActivity"
             android:configChanges="orientation|screenSize"
             android:exported="true">
@@ -75,11 +65,6 @@
             android:configChanges="orientation|screenSize"
             android:enabled="true"
             android:exported="true" />
-
-<!--        <service-->
-<!--            android:name=".service.SendingService"-->
-<!--            android:enabled="true"-->
-<!--            android:exported="true" />-->
     </application>
 
 </manifest>

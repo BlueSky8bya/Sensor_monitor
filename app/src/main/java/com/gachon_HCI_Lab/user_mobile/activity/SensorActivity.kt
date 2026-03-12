@@ -13,28 +13,23 @@ import com.gachon_HCI_Lab.user_mobile.common.CacheManager
 import com.gachon_HCI_Lab.user_mobile.common.CsvController
 import com.gachon_HCI_Lab.user_mobile.common.DeviceInfo
 import com.gachon_HCI_Lab.user_mobile.common.SocketState
-import com.gachon_HCI_Lab.user_mobile.common.SocketStateEvent
 import com.gachon_HCI_Lab.user_mobile.sensor.controller.SensorController
 import com.gachon_HCI_Lab.user_mobile.service.AcceptService
 import com.gachon_HCI_Lab.user_mobile.databinding.ActivitySensorBinding
 import com.gun0912.tedpermission.PermissionListener
 import com.gun0912.tedpermission.normal.TedPermission
 import org.greenrobot.eventbus.EventBus
-import org.greenrobot.eventbus.Subscribe
 import java.io.File
 
-
-class SensorActivity() : AppCompatActivity() {
-    private lateinit var serviceIntent : Intent
+class SensorActivity : AppCompatActivity() {
     private lateinit var sensorController: SensorController
     private lateinit var binding: ActivitySensorBinding
 
-    private val ACTION_START_LOCATION_SERVICE = "startLocationService"
-    private val ACTION_STOP_LOCATION_SERVICE = "stopLocationService"
+    companion object {
+        private const val ACTION_START_LOCATION_SERVICE = "startLocationService"
+        private const val ACTION_STOP_LOCATION_SERVICE = "stopLocationService"
+    }
 
-    /**
-     * 뒤로가기 연속으로 누르면 앱 종료
-     **/
     private val callback = object : OnBackPressedCallback(true) {
         var backPressedTime: Long = 0
         override fun handleOnBackPressed() {
@@ -50,39 +45,33 @@ class SensorActivity() : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        //로그인 페이지에서 온 id들 가져오기
-        DeviceInfo.init(intent.getStringExtra("DeviceID").toString(),
-            intent.getStringExtra("ID").toString())
+        DeviceInfo.init(
+            intent.getStringExtra("DeviceID").toString(),
+            intent.getStringExtra("ID").toString()
+        )
 
-//        setContentView(R.layout.activity_sensor)
         binding = ActivitySensorBinding.inflate(layoutInflater)
         setContentView(binding.root)
         sensorController = SensorController.getInstance(this)
 
-        // 권한 허가
+        // Bluetooth 권한 요청
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             requestPermissions(arrayOf(
-                    Manifest.permission.BLUETOOTH,
-                    Manifest.permission.BLUETOOTH_SCAN,
-                    Manifest.permission.BLUETOOTH_ADVERTISE,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ), 1)
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ), 1)
+        } else {
             requestPermissions(arrayOf(Manifest.permission.BLUETOOTH), 1)
         }
+
+        // 알림 권한 (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             TedPermission.create()
-                .setPermissionListener(object: PermissionListener {
-                    override fun onPermissionGranted() {
-                        Toast.makeText(this@SensorActivity,
-                            "알림 권한 허가",
-                            Toast.LENGTH_SHORT).show()
-                    }
-
+                .setPermissionListener(object : PermissionListener {
+                    override fun onPermissionGranted() {}
                     override fun onPermissionDenied(deniedPermissions: MutableList<String>?) {
-                        Toast.makeText(this@SensorActivity,
-                            "알림 권한 허가",
-                            Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@SensorActivity, "알림 권한이 거부되었습니다.", Toast.LENGTH_SHORT).show()
                     }
                 })
                 .setDeniedMessage("알림 권한 허가가 필요합니다")
@@ -90,41 +79,24 @@ class SensorActivity() : AppCompatActivity() {
                 .check()
         }
 
-        // 화면
         binding.stateLabel.text = SocketState.NONE.toString()
-        binding.BtnStart.setOnClickListener {
-            startLocationService()
-        }
-        binding.BtnStop.setOnClickListener {
-            stopLocationService()
-        }
-//        binding.BtnCsvCheck.setOnClickListener {
-//            val intent = Intent(this, CsvPopupActivity::class.java)
-//            startActivity(intent)
-//        }
+        binding.BtnStart.setOnClickListener { startLocationService() }
+        binding.BtnStop.setOnClickListener { stopLocationService() }
         binding.BtnToChartActivity.setOnClickListener {
-            val intent = Intent(this, SensorChartActivity::class.java)
-            startActivity(intent)
+            startActivity(Intent(this, SensorChartActivity::class.java))
         }
 
-        //로그아웃 버튼
-        binding.BtnLogout.setOnClickListener{
-            CacheManager.deleteCacheFile(this,"login.txt")
-
-            // RoomDB초기화 하는 코드 추가해야함
-            // 로그아웃한 경우는 이용자가 변경된 경우이므로 내부 정보를 모두 초기화 해야함
-            
-            //RoomDB 전체 삭제 오류가 있음
-            SensorController.getInstance(this).deleteAll()
+        binding.BtnLogout.setOnClickListener {
+            CacheManager.deleteCacheFile(this, "login.txt")
+            sensorController.deleteAll()
             val sensorRootPath = File(CsvController.getDownloadPath(), "sensor_data").absolutePath
             CsvController.deleteFilesInDirectory(sensorRootPath)
 
-            val intent = Intent(this, LoginActivity::class.java)
-            startActivity(intent)
+            startActivity(Intent(this, LoginActivity::class.java))
             finish()
         }
 
-        this.onBackPressedDispatcher.addCallback(this, callback)
+        onBackPressedDispatcher.addCallback(this, callback)
     }
 
     override fun onStart() {
@@ -139,55 +111,37 @@ class SensorActivity() : AppCompatActivity() {
 
     private fun startLocationService() {
         if (!isLocationServiceRunning()) {
-            val intent = Intent(this, AcceptService::class.java)
-            intent.action = ACTION_START_LOCATION_SERVICE
-            this.startService(intent)
+            val intent = Intent(this, AcceptService::class.java).apply {
+                action = ACTION_START_LOCATION_SERVICE
+            }
+            startService(intent)
             Toast.makeText(this, "Service started", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun stopLocationService() {
         if (isLocationServiceRunning()) {
-            val intent = Intent(this, AcceptService::class.java)
-            intent.action = ACTION_STOP_LOCATION_SERVICE
-            this.stopService(intent)
+            val intent = Intent(this, AcceptService::class.java).apply {
+                action = ACTION_STOP_LOCATION_SERVICE
+            }
+            startService(intent)
 
             val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.cancel(1) // cancel(알림 특정 id)
+            notificationManager.cancel(1)
             Toast.makeText(this, "Service stopped", Toast.LENGTH_SHORT).show()
         }
     }
 
+    // [경고 해결] 불필요한 null 체크 제거 및 로직 완성
     private fun isLocationServiceRunning(): Boolean {
-        val activityManager = this.getSystemService(ACTIVITY_SERVICE) as ActivityManager
-        if (activityManager != null) {
-            for (service in activityManager.getRunningServices(Int.MAX_VALUE)) {
-                if (AcceptService::class.java.name == service.service.className) {
-                    if (service.foreground) {
-                        return true
-                    }
-                }
+        val activityManager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        // getRunningServices는 여전히 deprecated 상태이나, 본인 서비스 확인용으로는 사용 가능
+        @Suppress("DEPRECATION")
+        for (service in activityManager.getRunningServices(Int.MAX_VALUE)) {
+            if (AcceptService::class.java.name == service.service.className) {
+                if (service.foreground) return true
             }
         }
         return false
     }
-
-    @Subscribe
-    fun listenSocketState(event: SocketStateEvent) {
-        val state = event.state.name
-        runOnUiThread {
-            binding.stateLabel.text = state
-        }
-    }
-
-//    @Subscribe
-//    fun listenThreadState(event: ThreadStateEvent) {
-//        if (ThreadState.STOP == event.state) {
-//            Log.d("스레드 상태 감지", "서비스 종료")
-//            val intent = Intent(this, AcceptService::class.java)
-//            stopService(intent)
-//            EventBus.getDefault().post(SocketStateEvent(SocketState.NONE))
-//        }
-//    }
-
 }

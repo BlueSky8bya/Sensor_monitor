@@ -8,15 +8,16 @@ import com.gachon_HCI_Lab.user_mobile.sensor.model.ThreeAxisSensorDto
  * 정규표현식 클래스
  * 소켓을 통해 수신한 데이터 수집을 위해 사용 
  * */
-class RegexManager private constructor(context: Context) {
+class RegexManager private constructor() {
 
     // 싱글톤 구현
     companion object {
         @Volatile
         private var INSTANCE: RegexManager? = null
-        fun getInstance(_context: Context): RegexManager {
+        // context 없이 호출 가능하도록 변경
+        fun getInstance(): RegexManager {
             return INSTANCE ?: synchronized(this) {
-                INSTANCE ?: RegexManager(_context).also { INSTANCE = it }
+                INSTANCE ?: RegexManager().also { INSTANCE = it }
             }
         }
     }

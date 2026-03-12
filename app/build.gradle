@@ -1,7 +1,7 @@
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
-    id 'kotlin-android-extensions'
+    id 'kotlin-parcelize'
     id "org.jetbrains.kotlin.kapt"
 }
 
@@ -17,9 +17,16 @@ android {
         versionName "1.1"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
 
-        buildFeatures {
-            viewBinding true
+    // [수정] kapt 설정을 별도 블록으로 분리하여 경고 해결 및 가독성 향상
+    kapt {
+        // [핵심] 인식되지 않는 옵션에 대한 경고를 강제로 끕니다.
+        javacOptions {
+            option("-Xlint:-processing")
+        }
+        arguments {
+            arg("room.schemaLocation", "$projectDir/schemas")
         }
     }
 
@@ -29,58 +36,46 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
+
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '17'
     }
 
-    viewBinding {
-        enabled = true
-    }
-
-    dataBinding {
-        enabled = true
+    buildFeatures {
+        viewBinding true
+        dataBinding true
     }
 }
 
 dependencies {
+    // 안드로이드 기본 라이브러리
     implementation 'androidx.core:core-ktx:1.7.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.8.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    testImplementation 'junit:junit:4.13.2'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
 
-    // 권한 허용 라이브러리
+    // 유틸리티 및 통신
     implementation 'io.github.ParkSangGwon:tedpermission-normal:3.3.0'
-
-    // okhttp3 라이브러리. 서버와 HTTP통신에 사용
     implementation 'com.squareup.okhttp3:okhttp:3.10.0'
-    // MPAndroidChart 라이브러리. SensorCahrtActivity에서 사용
     implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
+    implementation 'com.opencsv:opencsv:5.7.1'
+    implementation 'org.greenrobot:eventbus:3.3.1'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.1'
+    implementation 'androidx.work:work-runtime-ktx:2.7.0'
 
-    // RoomDB 사용을 위한 라이브러리. 내부 DB로 사용
-    implementation "androidx.room:room-runtime:2.3.0"
-    annotationProcessor "androidx.room:room-compiler:2.3.0"
+    // Room DB (버전 일관성 유지)
+    implementation "androidx.room:room-runtime:2.5.0"
     implementation "androidx.room:room-ktx:2.5.0"
     kapt "androidx.room:room-compiler:2.5.0"
-    // opencsv 라이브러리. csv 다루는 데 사용
-    implementation 'com.opencsv:opencsv:5.7.1'
-    // 안드로이드 12 오류 대비
-    implementation'androidx.work:work-runtime-ktx:2.7.0'
-    // greenbot 라이브러리. 이벤트 감지를 위한 이벤트 버스를 위해 사용
-    implementation "org.greenrobot:eventbus:3.3.1"
-    // 코루틴을 위해 사용
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.1'
 
-    // 테스트 코드 작성용 의존성
+    // 테스트
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.mockito.kotlin:mockito-kotlin:4.1.0'
-
-//    // 디버그용 leakCanary
-//    debugImplementation 'com.squareup.leakcanary:leakcanary-android:2.6'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
 }
