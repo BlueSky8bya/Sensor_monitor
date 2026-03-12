@@ -44,8 +44,9 @@ class CsvPopupActivity: AppCompatActivity() {
         recyclerView.adapter = adapter
 
         // CSV 파일 개수 가져오기
-        val csvFolderPath = CsvController.getExternalPath(applicationContext)// CSV 파일들이 있는 폴더 경로 설정
+        val csvFolderPath = File(CsvController.getDownloadPath(), "sensor_data").absolutePath
         val csvFolder = File(csvFolderPath)
+        
         if (csvFolder.exists() && csvFolder.isDirectory) {
             val csvFiles = csvFolder.listFiles { file ->
                 file.extension.equals("csv", ignoreCase = true) // 확장자가 .csv인 파일들만 가져옴

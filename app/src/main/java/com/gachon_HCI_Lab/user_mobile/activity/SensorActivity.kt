@@ -21,6 +21,7 @@ import com.gun0912.tedpermission.PermissionListener
 import com.gun0912.tedpermission.normal.TedPermission
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
+import java.io.File
 
 
 class SensorActivity() : AppCompatActivity() {
@@ -115,7 +116,8 @@ class SensorActivity() : AppCompatActivity() {
             
             //RoomDB 전체 삭제 오류가 있음
             SensorController.getInstance(this).deleteAll()
-            CsvController.deleteFilesInDirectory(CsvController.getExternalPath(this))
+            val sensorRootPath = File(CsvController.getDownloadPath(), "sensor_data").absolutePath
+            CsvController.deleteFilesInDirectory(sensorRootPath)
 
             val intent = Intent(this, LoginActivity::class.java)
             startActivity(intent)

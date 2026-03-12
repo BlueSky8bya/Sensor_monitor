@@ -15,6 +15,7 @@ import com.gachon_HCI_Lab.user_mobile.common.CacheManager
 import com.gachon_HCI_Lab.user_mobile.common.CsvController
 import com.gachon_HCI_Lab.user_mobile.sensor.AppDatabase
 import com.gachon_HCI_Lab.user_mobile.databinding.ActivityLoginBinding
+import java.io.File
 
 class LoginActivity : AppCompatActivity() {
     private lateinit var db: AppDatabase
@@ -34,12 +35,8 @@ class LoginActivity : AppCompatActivity() {
         requestIgnoreBatteryOptimization()
 
         // 오래된 센서 데이터 삭제
-        CsvController.getExternalPath(this, "Sensor").let {
-            CsvController.deleteOldfiles(it, 60 * 60 * 24 * 1000)
-        }
-        CsvController.getExternalPath(this, "Sensor/Sended").let {
-            CsvController.deleteOldfiles(it, 60 * 60 * 24 * 1000)
-        }
+        val sensorRootPath = File(CsvController.getDownloadPath(), "sensor_data").absolutePath
+        CsvController.deleteFilesInDirectory(sensorRootPath)
 
         val deviceID = BTManager.getUUID(this, BTManager.getConnectedDevice(this, BTManager.connectedDevices(this)))
         Log.d("LoginActivity", "deviceID: $deviceID")

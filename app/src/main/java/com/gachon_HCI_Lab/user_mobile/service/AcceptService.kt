@@ -160,8 +160,8 @@ class AcceptService : Service() {
             override fun run() {
                 CoroutineScope(Dispatchers.IO).launch {
                     if (isConnected) {
-                        sensorController.writeCsv(this@AcceptService, "OneAxis")
-                        sensorController.writeCsv(this@AcceptService, "ThreeAxis")
+                        sensorController.writeCsv("OneAxis")
+                        sensorController.writeCsv("ThreeAxis")
                         count++
                         if (count >= 6) { // 5분 * 6 = 30분
                             sendCSV()
@@ -313,11 +313,13 @@ class AcceptService : Service() {
             ThreadState.RUN -> {
                 Log.d(tag, "SOCKET_CONNECT!")
                 csvWrite(1000 * 60 * 5) // 5분 주기
-                true
+                true // RUN일 때 isConnected에 true 저장
             }
             else -> {
                 Log.d(tag, "SOCKET_CLOSE!")
-                false
+                timer?.cancel() // 연결 끊기면 타이머 정지
+                timer = null
+                false // [수정] else일 때 isConnected에 false 저장
             }
         }
     }

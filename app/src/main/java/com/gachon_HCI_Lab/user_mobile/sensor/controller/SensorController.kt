@@ -206,10 +206,9 @@ class SensorController(context: Context) {
 
     /**
      * 로컬 DB에서 가져온 센서 데이터를 csv에 저장하는 메소드
-     * sensorName: PpgGreen,HeartRate (현재 코드에선 SensorEnum 사용)
-     * */
-    suspend fun writeCsv(context: Context, type: String) = coroutineScope {
-        // sensorName 적절하게 들어왔는지, 네임을 적절하게 넣어야 함
+     */
+    suspend fun writeCsv(type: String) = coroutineScope {
+        // DB에서 데이터 추출
         val sensorSet: List<AbstractSensor> = dataExport(type)
 
         // 데이터를 센서 타입별로 나눈 Map
@@ -218,40 +217,18 @@ class SensorController(context: Context) {
         for (dataList in splittedDatas) {
             val sensorName = dataList.key
 
-            var fileName = CsvController.fileExist(context, sensorName)
-
-            if (fileName == null || fileName == "") {
-                fileName = CsvController.csvFirst(context, sensorName, dataList.value)
-            }
-
-            if(fileName == null || fileName == "") {
-                throw Exception("file make error")
-            }
-
+            // 2. fileName 변수와 getExistFileName 호출 삭제
+            // (csvSave 내부에서 파일 존재 여부를 체크하므로 밖에서 미리 확인할 필요 없음)
+            
             try {
-                CsvController.csvSave(context, fileName, dataList.value)
-            } catch (e: IOException) {
-                Log.e(this.toString(), "IOException")
-                // 혹여나 delay로 인해 터질때 대비
-//                delay(1000)
-//                CsvController.csvFirst(context, sensorName)
-//                val regenFile = CsvController.fileExist(context, sensorName)
-//                CsvController.csvSave(context, regenFile!!, dataList.value)
-                e.printStackTrace()
-            } catch (e: NullPointerException) {
-                Log.e(this.toString(), "NullPointerException")
-//                delay(1000)
-                CsvController.csvFirst(context, sensorName, dataList.value)
-//                val regenFile = CsvController.fileExist(context, sensorName)
-//                CsvController.csvSave(context, regenFile!!, dataList.value)
-                e.printStackTrace()
+                // 바로 저장 시도
+                CsvController.csvSave(sensorName, dataList.value)
+                Log.d(TAG, "$sensorName 데이터 CSV 저장 시도 완료")
             } catch (e: Exception) {
-                Log.e(this.toString(), e.printStackTrace().toString())
+                Log.e(TAG, "CSV 저장 중 오류 발생: ${e.message}")
                 e.printStackTrace()
             }
-            Log.d(this.toString(), sensorName + "csv 생성")
         }
-
     }
 
     fun splitData(sensorSet: List<AbstractSensor>): MutableMap<String, List<AbstractSensor>> {
