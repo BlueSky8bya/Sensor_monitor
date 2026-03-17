@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat // 색상 변경을 위해 추가
+import com.gachon_HCI_Lab.user_mobile.R // R 리소스 추가
 import com.gachon_HCI_Lab.user_mobile.common.CacheManager
 import com.gachon_HCI_Lab.user_mobile.common.CsvController
 import com.gachon_HCI_Lab.user_mobile.common.DeviceInfo
@@ -19,6 +21,8 @@ import com.gachon_HCI_Lab.user_mobile.databinding.ActivitySensorBinding
 import com.gun0912.tedpermission.PermissionListener
 import com.gun0912.tedpermission.normal.TedPermission
 import org.greenrobot.eventbus.EventBus
+import org.greenrobot.eventbus.Subscribe // 추가
+import org.greenrobot.eventbus.ThreadMode // 추가
 import java.io.File
 
 class SensorActivity : AppCompatActivity() {
@@ -99,14 +103,19 @@ class SensorActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, callback)
     }
 
+    // ── [수정 1] EventBus 주석 해제 (우체부 다시 고용) ──
     override fun onStart() {
         super.onStart()
-        // if (!EventBus.getDefault().isRegistered(this)) EventBus.getDefault().register(this)
+        if (!EventBus.getDefault().isRegistered(this)) {
+            EventBus.getDefault().register(this)
+        }
     }
 
     override fun onStop() {
         super.onStop()
-        // if (EventBus.getDefault().isRegistered(this)) EventBus.getDefault().unregister(this)
+        if (EventBus.getDefault().isRegistered(this)) {
+            EventBus.getDefault().unregister(this)
+        }
     }
 
     private fun startLocationService() {
@@ -132,10 +141,8 @@ class SensorActivity : AppCompatActivity() {
         }
     }
 
-    // [경고 해결] 불필요한 null 체크 제거 및 로직 완성
     private fun isLocationServiceRunning(): Boolean {
         val activityManager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
-        // getRunningServices는 여전히 deprecated 상태이나, 본인 서비스 확인용으로는 사용 가능
         @Suppress("DEPRECATION")
         for (service in activityManager.getRunningServices(Int.MAX_VALUE)) {
             if (AcceptService::class.java.name == service.service.className) {
@@ -143,5 +150,28 @@ class SensorActivity : AppCompatActivity() {
             }
         }
         return false
+    }
+
+    // ── [수정 2] 상태 변화를 감지하고 화면을 바꿔주는 담당자 추가 ──
+    @Subscribe(threadMode = ThreadMode.MAIN)
+    fun onSocketStateChanged(state: SocketState) {
+        // 1. 전달받은 상태(CONNECT, NONE 등)로 글씨 변경
+        binding.stateLabel.text = state.toString()
+
+        // 2. 상태에 따라 예쁘게 색깔 입히기
+        when (state) {
+            SocketState.CONNECT -> {
+                // 연결 성공 시 초록색 글씨로 변경
+                binding.stateLabel.setTextColor(ContextCompat.getColor(this, R.color.status_success))
+            }
+            SocketState.NONE -> {
+                // 연결 끊김 시 원래대로 주황색 글씨로 변경
+                binding.stateLabel.setTextColor(ContextCompat.getColor(this, R.color.status_warning))
+            }
+            else -> {
+                // 기타 상태
+                binding.stateLabel.setTextColor(ContextCompat.getColor(this, R.color.status_info))
+            }
+        }
     }
 }
