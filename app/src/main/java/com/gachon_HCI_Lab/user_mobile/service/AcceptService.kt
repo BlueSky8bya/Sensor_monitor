@@ -313,13 +313,21 @@ class AcceptService : Service() {
             ThreadState.RUN -> {
                 Log.d(tag, "SOCKET_CONNECT!")
                 csvWrite(1000 * 60 * 5) // 5분 주기
-                true // RUN일 때 isConnected에 true 저장
+
+                // ── [핵심 추가] SensorActivity 화면에 "연결됐어!" 라고 방송하기 ──
+                EventBus.getDefault().post(SocketStateEvent(SocketState.CONNECT))
+
+                true
             }
             else -> {
                 Log.d(tag, "SOCKET_CLOSE!")
                 timer?.cancel() // 연결 끊기면 타이머 정지
                 timer = null
-                false // [수정] else일 때 isConnected에 false 저장
+
+                // ── [핵심 추가] SensorActivity 화면에 "연결 끊겼어!" 라고 방송하기 ──
+                EventBus.getDefault().post(SocketStateEvent(SocketState.NONE))
+
+                false
             }
         }
     }

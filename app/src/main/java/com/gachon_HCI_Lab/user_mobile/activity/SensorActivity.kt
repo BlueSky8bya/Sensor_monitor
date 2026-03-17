@@ -15,6 +15,7 @@ import com.gachon_HCI_Lab.user_mobile.common.CacheManager
 import com.gachon_HCI_Lab.user_mobile.common.CsvController
 import com.gachon_HCI_Lab.user_mobile.common.DeviceInfo
 import com.gachon_HCI_Lab.user_mobile.common.SocketState
+import com.gachon_HCI_Lab.user_mobile.common.SocketStateEvent
 import com.gachon_HCI_Lab.user_mobile.sensor.controller.SensorController
 import com.gachon_HCI_Lab.user_mobile.service.AcceptService
 import com.gachon_HCI_Lab.user_mobile.databinding.ActivitySensorBinding
@@ -152,24 +153,25 @@ class SensorActivity : AppCompatActivity() {
         return false
     }
 
-    // ── [수정 2] 상태 변화를 감지하고 화면을 바꿔주는 담당자 추가 ──
+    // SocketStateEvent로 받도록 파라미터 변경 ──
     @Subscribe(threadMode = ThreadMode.MAIN)
-    fun onSocketStateChanged(state: SocketState) {
-        // 1. 전달받은 상태(CONNECT, NONE 등)로 글씨 변경
-        binding.stateLabel.text = state.toString()
+    fun onSocketStateChanged(event: SocketStateEvent) {
 
-        // 2. 상태에 따라 예쁘게 색깔 입히기
-        when (state) {
+        // 봉투 안에서 실제 상태(CONNECT, NONE)를 꺼냅니다
+        val currentState = event.state
+
+        // 1. 글씨 변경
+        binding.stateLabel.text = currentState.toString()
+
+        // 2. 색상 변경
+        when (currentState) {
             SocketState.CONNECT -> {
-                // 연결 성공 시 초록색 글씨로 변경
                 binding.stateLabel.setTextColor(ContextCompat.getColor(this, R.color.status_success))
             }
             SocketState.NONE -> {
-                // 연결 끊김 시 원래대로 주황색 글씨로 변경
                 binding.stateLabel.setTextColor(ContextCompat.getColor(this, R.color.status_warning))
             }
             else -> {
-                // 기타 상태
                 binding.stateLabel.setTextColor(ContextCompat.getColor(this, R.color.status_info))
             }
         }
