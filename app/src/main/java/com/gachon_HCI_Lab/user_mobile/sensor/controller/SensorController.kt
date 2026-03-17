@@ -14,37 +14,30 @@ import com.gachon_HCI_Lab.user_mobile.sensor.model.ThreeAxisData
 import com.gachon_HCI_Lab.user_mobile.sensor.service.OneAxisDataService
 import com.gachon_HCI_Lab.user_mobile.sensor.service.ThreeAxisDataService
 import kotlinx.coroutines.*
-import java.io.IOException
 import kotlin.concurrent.thread
 
 /**
  * 센서데이터 관리하는 클래스
  * */
 class SensorController(context: Context) {
+    // 1. 미사용 변수(oneAxisList, threeAxisList) 삭제함
     private val oneAxisDataService: OneAxisDataService = OneAxisDataService.getInstance(context)
     private val threeAxisDataService: ThreeAxisDataService = ThreeAxisDataService.getInstance(context)
     private val prefManager: SharePreferenceManager = SharePreferenceManager.getInstance(context)
     private val regexManager: RegexManager = RegexManager.getInstance()
 
-    private val oneAxisList = listOf(
-        SensorEnum.HEART_RATE.value,
-        SensorEnum.LIGHT.value,
-        SensorEnum.PPG_GREEN.value,
-        SensorEnum.STEP_COUNT.value
-    )
-
-    private val threeAxisList = listOf(
-        SensorEnum.ACCELEROMETER.value,
-        SensorEnum.GRAVITY.value,
-        SensorEnum.GYROSCOPE.value
-    )
+    // [중요] 버퍼 로직을 위한 변수들 (이전 답변에서 추가한 부분)
+    private val dataBuffer = mutableListOf<String>()
+    private val bufferSize = 1024
+    private val bufferTime = 2000L
+    private var flushJob: Job? = null
 
     companion object {
         private var INSTANCE: SensorController? = null
 
-        fun getInstance(_context: Context): SensorController {
+        fun getInstance(context: Context): SensorController { // _context 대신 context로 변경
             return INSTANCE ?: synchronized(this) {
-                INSTANCE ?: SensorController(_context).also {
+                INSTANCE ?: SensorController(context).also {
                     INSTANCE = it
                 }
             }
@@ -53,28 +46,23 @@ class SensorController(context: Context) {
 
     /**
      * 소켓으로부터 수신받은 데이터를 버퍼에 저장하고 플러시하는 메소드
-     * data: 소켓으로부터 받은 String 데이터
-     * */
+     */
     suspend fun dataAccept(data: String) = coroutineScope {
-        val bufferSize = 1024 // 버퍼 사이즈 설정
-        val bufferTime = 2000L // 버퍼링 주기 설정 (2.0 초)
-        val buffer = mutableListOf<String>() // 버퍼 선언
+        // [수정] 클래스 멤버 변수인 dataBuffer에 데이터를 추가합니다.
+        dataBuffer.add(data)
 
-        // 데이터를 받아서 버퍼에 저장하는 코루틴
-        launch {
-            buffer.add(data) // 데이터를 버퍼에 추가
-            if (buffer.size >= bufferSize) { // 버퍼가 가득 찼을 경우
-                flushBuffer(buffer) // 버퍼 내용을 처리
-                buffer.clear()
-            }
+        // [수정] 클래스 멤버 변수인 bufferSize와 비교합니다.
+        if (dataBuffer.size >= bufferSize) {
+            flushBuffer(dataBuffer)
         }
 
-        // 일정 주기마다 버퍼 내용을 처리하는 코루틴
-        launch {
-            delay(bufferTime)
-            if (buffer.isNotEmpty()) { // 버퍼에 내용이 있을 경우
-                flushBuffer(buffer) // 버퍼 내용을 처리
-                buffer.clear()
+        // [수정] 일정 주기마다 처리하는 타이머 코루틴이 없으면 새로 생성 (flushJob 활용)
+        if (flushJob == null || flushJob?.isCompleted == true) {
+            flushJob = launch {
+                delay(bufferTime) // 클래스의 bufferTime 사용
+                if (dataBuffer.isNotEmpty()) {
+                    flushBuffer(dataBuffer)
+                }
             }
         }
     }
@@ -205,35 +193,46 @@ class SensorController(context: Context) {
     }
 
     /**
-     * 로컬 DB에서 가져온 센서 데이터를 csv에 저장하는 메소드
+     * 로컬 DB에서 가져온 센서 데이터를 csv에 저장하고 DB를 비우는 메소드
      */
     suspend fun writeCsv(type: String) = coroutineScope {
-        // DB에서 데이터 추출
+        // 1. DB에서 현재까지 쌓인 데이터 추출
         val sensorSet: List<AbstractSensor> = dataExport(type)
 
-        // 데이터를 센서 타입별로 나눈 Map
+        // 만약 가져온 데이터가 없다면 중단
+        if (sensorSet.isEmpty()) return@coroutineScope
+
+        // 2. 데이터를 센서 타입별로 분리
         val splittedDatas = splitData(sensorSet)
 
+        // 3. 파일 저장 시도
         for (dataList in splittedDatas) {
             val sensorName = dataList.key
-
-            // 2. fileName 변수와 getExistFileName 호출 삭제
-            // (csvSave 내부에서 파일 존재 여부를 체크하므로 밖에서 미리 확인할 필요 없음)
-            
             try {
-                // 바로 저장 시도
                 CsvController.csvSave(sensorName, dataList.value)
-                Log.d(TAG, "$sensorName 데이터 CSV 저장 시도 완료")
+                Log.d(TAG, "$sensorName 데이터 CSV 저장 완료")
             } catch (e: Exception) {
                 Log.e(TAG, "CSV 저장 중 오류 발생: ${e.message}")
-                e.printStackTrace()
             }
         }
+
+        // 4. 추출한 데이터를 다시 쓰지 않도록 DB를 즉시 비웁니다.
+        withContext(Dispatchers.IO) {
+            if (type == "OneAxis") {
+                oneAxisDataService.deleteAll()
+                // 커서(페이지네이션 기록)도 초기화해주는 것이 안전합니다.
+                prefManager.putCursor("oneAxis", 0)
+            } else {
+                threeAxisDataService.deleteAll()
+                prefManager.putCursor("threeAxis", 0)
+            }
+        }
+        Log.d("SensorController", "$type DB Cleared (Success)")
     }
 
     fun splitData(sensorSet: List<AbstractSensor>): MutableMap<String, List<AbstractSensor>> {
         // key: sensorName, value: sensorData
-        var resultMap : MutableMap<String, List<AbstractSensor>> = mutableMapOf()
+        val resultMap : MutableMap<String, List<AbstractSensor>> = mutableMapOf()
 
         for (data in sensorSet){
             val sensorName = data.type
@@ -284,40 +283,39 @@ class SensorController(context: Context) {
      * sharedPreference 싱글톤 객체
      * 데이터 조회 및 수집시(페이징 활용) 필요한 키 값 저장을 위해 사용
      */
-    class SharePreferenceManager private constructor(private val context: Context) {
+    /**
+     * sharedPreference 싱글톤 객체
+     */
+    class SharePreferenceManager private constructor() {
         companion object {
             private lateinit var pref: SharedPreferences
             private lateinit var editor: SharedPreferences.Editor
             private var instance: SharePreferenceManager? = null
 
-            fun getInstance(_context: Context): SharePreferenceManager {
+            fun getInstance(context: Context): SharePreferenceManager {
                 if (instance == null) {
-                    instance = SharePreferenceManager(_context)
-                    initialize(_context)
+                    instance = SharePreferenceManager()
+                    initialize(context)
                 }
                 return instance!!
             }
 
             private fun initialize(context: Context) {
-                pref = context.getSharedPreferences("pref", Activity.MODE_PRIVATE)
+                // [해결] 메모리 누수 방지를 위해 applicationContext 사용
+                pref = context.applicationContext.getSharedPreferences("pref", Activity.MODE_PRIVATE)
                 editor = pref.edit()
             }
         }
 
-        /**
-         * 페이지네이션에 사용되는 키값 가져오는 메소드
-         * */
+        // [해결] static field에 context를 저장하지 않도록 클래스 내부의 context 변수 삭제
+
         fun getCursor(sensorName: String): Int {
             return pref.getInt(sensorName + "Cursor", 0)
         }
 
-        /**
-         * 페이지네이션에 사용되는 키값 저장하는 메소드
-         * */
         fun putCursor(sensorName: String, lastCursor: Int) {
             editor.putInt(sensorName + "Cursor", lastCursor)
             editor.apply()
         }
     }
-
 }

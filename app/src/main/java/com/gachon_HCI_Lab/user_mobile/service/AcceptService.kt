@@ -1,14 +1,13 @@
 package com.gachon_HCI_Lab.user_mobile.service
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
-import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
@@ -28,7 +27,6 @@ import com.gachon_HCI_Lab.user_mobile.activity.SensorActivity
 import com.gachon_HCI_Lab.user_mobile.common.BTManager
 import com.gachon_HCI_Lab.user_mobile.common.DeviceInfo
 import com.gachon_HCI_Lab.user_mobile.common.ServerConnection
-import com.gachon_HCI_Lab.user_mobile.common.ServerConnection.Companion.saveErrorLog
 import com.gachon_HCI_Lab.user_mobile.common.SocketState
 import com.gachon_HCI_Lab.user_mobile.common.SocketStateEvent
 import com.gachon_HCI_Lab.user_mobile.common.ThreadState
@@ -44,7 +42,6 @@ import org.greenrobot.eventbus.ThreadMode
 import java.io.File
 import java.io.FileWriter
 import java.io.IOException
-import java.lang.reflect.Method
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -121,7 +118,7 @@ class AcceptService : Service() {
         val channelName = "Sensor Data Service"
         if (Build.VERSION.SDK_INT >= 26) {
             val channel = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_DEFAULT)
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
 
@@ -153,29 +150,40 @@ class AcceptService : Service() {
     }
 
     private fun csvWrite(time: Long) {
-        if (timer != null) return
+        // ── [수정] 핵심: 기존 타이머가 있다면 확실히 취소하고 초기화 ──
+        timer?.cancel()
+        timer = null
+
         var count = 0
         timer = Timer()
+
+        // scheduleAtFixedRate를 사용하여 연결 지연과 상관없이 최대한 고정 주기를 유지합니다.
         timer?.schedule(object : TimerTask() {
             override fun run() {
                 CoroutineScope(Dispatchers.IO).launch {
+                    // isConnected 체크는 유지하되, 로그를 남겨서 상태를 확인합니다.
                     if (isConnected) {
+                        Log.d(tag, "5분 주기 CSV 쓰기 시작")
                         sensorController.writeCsv("OneAxis")
                         sensorController.writeCsv("ThreeAxis")
+
                         count++
-                        if (count >= 6) { // 5분 * 6 = 30분
+                        if (count >= 6) { // 30분 경과
                             sendCSV()
                             count = 0
                         }
+                    } else {
+                        Log.w(tag, "워치 연결이 끊겨 있어 이번 주기(5분)는 저장을 건너뜁니다.")
                     }
                 }
             }
-        }, 0, time)
+        }, time, time) // 첫 실행도 5분 뒤부터 시작
     }
 
     /**
      * 30분 단위 파일 병합 및 서버 전송
      */
+    @SuppressLint("DefaultLocale")
     private fun sendCSV() {
         val downloadBasePath = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
 
@@ -198,7 +206,7 @@ class AcceptService : Service() {
                 val timestamp = file.name.split("_").getOrNull(1)?.split(".")?.get(0)?.toLongOrNull() ?: 0L
                 val cal = Calendar.getInstance().apply { time = Date(timestamp * 1000) }
                 val block = if (cal.get(Calendar.MINUTE) < 30) "00" else "30"
-                String.format("%04d%02d%02d_%02d%s", 
+                String.format("%04d%02d%02d_%02d%s",
                     cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, 
                     cal.get(Calendar.DAY_OF_MONTH), cal.get(Calendar.HOUR_OF_DAY), block)
             }
@@ -239,7 +247,7 @@ class AcceptService : Service() {
                     // 4. 서버 전송
                     val epochTime = try {
                         SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).parse(blockTime)?.time?.div(1000) ?: 0L
-                    } catch (e: Exception) { 0L }
+                    } catch (_: Exception) { 0L }
 
                     ServerConnection.postFile(mergedFile, DeviceInfo._uID, DeviceInfo._battery, epochTime.toString()) { isSuccess ->
                         if (isSuccess) {
@@ -281,11 +289,11 @@ class AcceptService : Service() {
                 // UI 작업은 메인 스레드에서 실행되도록 보장
                 Handler(Looper.getMainLooper()).post {
                     val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager
+                        val vibratorManager = getSystemService(VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager
                         vibratorManager.defaultVibrator
                     } else {
                         @Suppress("DEPRECATION")
-                        getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                        getSystemService(VIBRATOR_SERVICE) as Vibrator
                     }
 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

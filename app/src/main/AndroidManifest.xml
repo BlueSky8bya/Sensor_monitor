@@ -62,6 +62,7 @@
         <service
             android:name=".service.AcceptService"
             android:configChanges="orientation|screenSize"
+            android:foregroundServiceType="connectedDevice"
             android:enabled="true"
             android:exported="true" />
     </application>
