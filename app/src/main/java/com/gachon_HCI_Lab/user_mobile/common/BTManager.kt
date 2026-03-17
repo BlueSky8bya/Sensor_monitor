@@ -19,7 +19,22 @@ class BTManager {
     companion object {
         private const val TAG = "BluetoothManager"
 
+        /**
+         * 블루투스 어댑터가 활성화되어 있는지 가볍게 체크
+         * 배터리 최적화 시, 블루투스가 꺼져있다면 무거운 스캔 로직을 아예 시작하지 않도록 방어합니다.
+         */
+        fun isBluetoothEnabled(context: Context): Boolean {
+            val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+            return bluetoothManager.adapter?.isEnabled ?: false
+        }
+
         fun connectedDevices(context: Context): MutableSet<BluetoothDevice>? {
+            // [보강] 블루투스가 꺼져 있는 경우 미리 차단
+            if (!isBluetoothEnabled(context)) {
+                Log.e(TAG, "Bluetooth is disabled.")
+                return null
+            }
+
             val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
             val bluetoothAdapter = bluetoothManager.adapter
 
@@ -46,9 +61,12 @@ class BTManager {
             }
         }
 
-        // [경고 해결] VibratorManager 사용 및 진동 알림 로직 개선
         fun checkAndLogConnection(context: Context, devices: MutableSet<BluetoothDevice>?) {
-            if (devices == null) return
+            if (devices == null) {
+                // [보강] 연결된 기기 리스트가 아예 없을 때 로그
+                logError("CheckConnection: No paired devices found.")
+                return
+            }
 
             if (!checkBluetoothPermission(context)) {
                 requestBluetoothPermission(context)
@@ -65,26 +83,31 @@ class BTManager {
                 }
 
                 if (!allDevicesConnected) {
-                    // 진동 서비스 획득 (API 31+ 대응)
-                    val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-                        vibratorManager.defaultVibrator
-                    } else {
-                        @Suppress("DEPRECATION")
-                        context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-                    }
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        vibrator.vibrate(VibrationEffect.createOneShot(2500, VibrationEffect.DEFAULT_AMPLITUDE))
-                    } else {
-                        @Suppress("DEPRECATION")
-                        vibrator.vibrate(2500)
-                    }
-
+                    triggerVibration(context)
                     Toast.makeText(context, "Bluetooth 통신을 확인해주세요.", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: SecurityException) {
                 Log.e(TAG, "Permission denied: ${e.message}")
+            }
+        }
+
+        /**
+         * 진동 로직을 별도 함수로 분리하여 가독성 향상 (API 31+ 대응)
+         */
+        private fun triggerVibration(context: Context) {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vibratorManager.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(2500, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(2500)
             }
         }
 
@@ -104,7 +127,7 @@ class BTManager {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
             } else {
-                true // 낮은 버전에서는 BLUETOOTH 권한이 일반 권한임
+                true
             }
         }
 
@@ -118,25 +141,13 @@ class BTManager {
             }
         }
 
-        // BTManager.kt 의 companion object 내부에 추가
         fun getUUID(context: Context, device: BluetoothDevice?): String {
             if (device == null) return ""
-
-            if (!checkBluetoothPermission(context)) {
-                requestBluetoothPermission(context)
-                return ""
-            }
+            if (!checkBluetoothPermission(context)) return ""
 
             return try {
-                var dUuid = ""
-                if (device.uuids != null) {
-                    for (uuid in device.uuids) {
-                        // uuidFixed를 안 쓰기로 했으므로 바로 문자열로 반환하거나 특정 로직 수행
-                        dUuid = uuid.toString()
-                        break
-                    }
-                }
-                dUuid
+                // [보강] uuids가 null인 경우에 대한 안전한 처리
+                device.uuids?.firstOrNull()?.toString() ?: ""
             } catch (e: SecurityException) {
                 Log.e(TAG, "Permission denied: ${e.message}")
                 ""
@@ -145,20 +156,10 @@ class BTManager {
 
         fun getConnectedDevice(context: Context, devices: MutableSet<BluetoothDevice>?): BluetoothDevice? {
             if (devices == null) return null
-
-            if (!checkBluetoothPermission(context)) {
-                requestBluetoothPermission(context)
-                return null
-            }
+            if (!checkBluetoothPermission(context)) return null
 
             return try {
-                for (device in devices) {
-                    if (isConnected(device)) {
-                        Log.d(TAG, "Connected Device : ${device.name}")
-                        return device
-                    }
-                }
-                null
+                devices.firstOrNull { isConnected(it) }
             } catch (e: SecurityException) {
                 Log.e(TAG, "Permission denied: ${e.message}")
                 null

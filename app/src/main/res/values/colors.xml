@@ -1,10 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="purple_200">#FFBB86FC</color>
-    <color name="purple_500">#FF6200EE</color>
-    <color name="purple_700">#FF3700B3</color>
-    <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
+    <!-- ── Brand ── -->
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- ── Background ── -->
+    <color name="bg_primary">#FFFAFAFA</color>
+    <color name="bg_card">#FFFFFFFF</color>
+    <color name="bg_card_subtle">#FFF5F5F5</color>
+    <color name="bg_overlay">#1A000000</color>
+
+    <!-- ── Text ── -->
+    <color name="text_primary">#FF111111</color>
+    <color name="text_secondary">#FF666666</color>
+    <color name="text_tertiary">#FFAAAAAA</color>
+    <color name="text_hint">#FFCCCCCC</color>
+    <color name="text_disabled">#FFE0E0E0</color>
+    <color name="text_on_dark">#FFFFFFFF</color>
+
+    <!-- ── Input ── -->
+    <color name="stroke_default">#FFE0E0E0</color>
+    <color name="stroke_focused">#FF111111</color>
+    <color name="stroke_error">#FFE53935</color>
+
+    <!-- ── Accent ── -->
+    <color name="accent_primary">#FF111111</color>
+    <color name="accent_primary_light">#FFF5F5F5</color>
+
+    <!-- ── Status ── -->
+    <color name="status_success">#FF388E3C</color>
+    <color name="status_success_bg">#FFF1F8E9</color>
+    <color name="status_warning">#FFF57C00</color>
+    <color name="status_warning_bg">#FFFFF8E1</color>
+    <color name="status_error">#FFE53935</color>
+    <color name="status_error_bg">#FFFCE4EC</color>
+    <color name="status_info">#FF546E7A</color>
+    <color name="status_info_bg">#FFECEFF1</color>
+
+    <!-- ── Health / Biometric ── -->
+    <color name="heart_rate">#FFEF5350</color>
+    <color name="heart_rate_bg">#FFFCE4EC</color>
+    <color name="spo2">#FF42A5F5</color>
+    <color name="spo2_bg">#FFE3F2FD</color>
+    <color name="stress">#FFFFA726</color>
+    <color name="stress_bg">#FFFFF3E0</color>
+    <color name="steps">#FF66BB6A</color>
+    <color name="steps_bg">#FFF1F8E9</color>
+    <color name="sleep">#FF7986CB</color>
+    <color name="sleep_bg">#FFEDE7F6</color>
+    <color name="temperature">#FFFF7043</color>
+    <color name="temperature_bg">#FFFBE9E7</color>
+    <color name="hrv">#FF26A69A</color>
+    <color name="hrv_bg">#FFE0F2F1</color>
+
+    <!-- ── Divider / Border ── -->
+    <color name="divider">#FFEEEEEE</color>
+    <color name="border_light">#FFF0F0F0</color>
 </resources>

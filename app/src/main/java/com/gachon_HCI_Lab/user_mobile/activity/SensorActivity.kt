@@ -101,12 +101,12 @@ class SensorActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (!EventBus.getDefault().isRegistered(this)) EventBus.getDefault().register(this)
+        // if (!EventBus.getDefault().isRegistered(this)) EventBus.getDefault().register(this)
     }
 
     override fun onStop() {
         super.onStop()
-        if (EventBus.getDefault().isRegistered(this)) EventBus.getDefault().unregister(this)
+        // if (EventBus.getDefault().isRegistered(this)) EventBus.getDefault().unregister(this)
     }
 
     private fun startLocationService() {

@@ -21,10 +21,11 @@ android {
 
     // [수정] kapt 설정을 별도 블록으로 분리하여 경고 해결 및 가독성 향상
     kapt {
-        // [핵심] 인식되지 않는 옵션에 대한 경고를 강제로 끕니다.
+        // 1. 인식되지 않는 옵션에 대한 경고를 무시하도록 javac 인자 추가
         javacOptions {
             option("-Xlint:-processing")
         }
+        // 2. Room 스키마 경로 설정
         arguments {
             arg("room.schemaLocation", "$projectDir/schemas")
         }
