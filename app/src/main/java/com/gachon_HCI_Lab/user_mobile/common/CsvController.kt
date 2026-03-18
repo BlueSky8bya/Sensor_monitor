@@ -14,15 +14,32 @@ import java.util.Locale
 object CsvController {
     private const val TAG = "CsvController"
 
-//    // [수정] 문자열 결합 대신 File 생성자 사용하여 경로 오류 방지
-//    private fun getCsvWriter(directory: File, fileName: String): CSVWriter {
-//        if (!directory.exists()) directory.mkdirs() // 폴더가 없으면 여기서 한 번 더 생성 보장
-//        val file = File(directory, fileName)
-//        val writer = BufferedWriter(OutputStreamWriter(FileOutputStream(file, true), Charsets.UTF_8))
-//        return CSVWriter(writer)
-//    }
+    /**
+     * 앱의 주요 이벤트나 에러를 파일로 남기는 함수
+     */
+    fun writeLog(message: String) {
+        val basePath = getDownloadPath()
+        val logDir = File(basePath, "sensor_data/logs")
+        if (!logDir.exists()) logDir.mkdirs()
 
-    // [수정] 공용 다운로드 경로를 안전하게 가져오는 함수
+        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val timestamp = sdf.format(Date())
+        val fileName = "app_debug_log_${SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())}.txt"
+        val logFile = File(logDir, fileName)
+
+        try {
+            // true: 이어쓰기(Append) 모드
+            val writer = BufferedWriter(FileWriter(logFile, true))
+            writer.write("[$timestamp] $message")
+            writer.newLine()
+            writer.flush()
+            writer.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "로그 파일 저장 실패: ${e.message}")
+        }
+    }
+
+    // 공용 다운로드 경로를 가져오는 함수
     fun getDownloadPath(): File {
         return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
     }

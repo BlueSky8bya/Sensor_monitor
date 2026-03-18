@@ -25,6 +25,7 @@ import androidx.core.app.NotificationCompat
 import com.gachon_HCI_Lab.user_mobile.R
 import com.gachon_HCI_Lab.user_mobile.activity.SensorActivity
 import com.gachon_HCI_Lab.user_mobile.common.BTManager
+import com.gachon_HCI_Lab.user_mobile.common.CsvController
 import com.gachon_HCI_Lab.user_mobile.common.DeviceInfo
 import com.gachon_HCI_Lab.user_mobile.common.ServerConnection
 import com.gachon_HCI_Lab.user_mobile.common.SocketState
@@ -312,22 +313,17 @@ class AcceptService : Service() {
     fun listenSocketState(event: ThreadStateEvent) {
         isConnected = when (event.state) {
             ThreadState.RUN -> {
-                Log.d(tag, "SOCKET_CONNECT!")
-                csvWrite(1000 * 60 * 5) // 5분 주기
-
-                // ── [핵심 추가] SensorActivity 화면에 "연결됐어!" 라고 방송하기 ──
+                CsvController.writeLog("CONNECTED: 워치와 소켓 연결 성공") // 로그 기록
+                csvWrite(1000 * 60 * 5)
                 EventBus.getDefault().post(SocketStateEvent(SocketState.CONNECT))
-
                 true
             }
             else -> {
-                Log.d(tag, "SOCKET_CLOSE!")
-                timer?.cancel() // 연결 끊기면 타이머 정지
+                val reason = if (event.state == ThreadState.STOP) "정상 종료" else "비정상 끊김"
+                CsvController.writeLog("DISCONNECTED: 연결 끊김 ($reason)") // 로그 기록
+                timer?.cancel()
                 timer = null
-
-                // ── [핵심 추가] SensorActivity 화면에 "연결 끊겼어!" 라고 방송하기 ──
                 EventBus.getDefault().post(SocketStateEvent(SocketState.NONE))
-
                 false
             }
         }
