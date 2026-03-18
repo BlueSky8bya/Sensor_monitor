@@ -70,7 +70,7 @@ class LoginActivity : AppCompatActivity() {
 
     private fun cleanOldSensorData() {
         val sensorRootPath = File(CsvController.getDownloadPath(), "sensor_data").absolutePath
-        CsvController.deleteFilesInDirectory(sensorRootPath)
+        // CsvController.deleteFilesInDirectory(sensorRootPath)
     }
 
     private fun setupLoginLogic(deviceID: String) {

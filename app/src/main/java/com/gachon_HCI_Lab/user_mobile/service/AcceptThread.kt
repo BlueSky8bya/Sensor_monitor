@@ -1,5 +1,6 @@
 package com.gachon_HCI_Lab.user_mobile.service
 
+import android.R.attr.tag
 import android.content.Context
 import android.util.Log
 import com.gachon_HCI_Lab.user_mobile.common.*
@@ -13,9 +14,6 @@ import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/**
- * 서비스에서 소켓 연결을 담당하는 클래스
- * */
 class AcceptThread(context: Context) : Thread() {
     private lateinit var sensorController: SensorController
     private var reconstructedOneAxisData = StringBuilder()
@@ -25,6 +23,8 @@ class AcceptThread(context: Context) : Thread() {
         try {
             sensorController = SensorController.getInstance(context)
         } catch (e: Exception) {
+            // 초기화 에러 로그 추가
+            CsvController.writeLog("INIT_ERROR: ${e.message}")
             EventBus.getDefault().post(ThreadStateEvent(ThreadState.STOP))
             e.printStackTrace()
         }
@@ -33,61 +33,75 @@ class AcceptThread(context: Context) : Thread() {
     override fun run() {
         BluetoothConnect.createSeverSocket()
         while(true) {
-            BluetoothConnect.createBluetoothSocket()
-            val inputStream = BluetoothConnect.createInputStream()
-            EventBus.getDefault().post(ThreadStateEvent(ThreadState.RUN))
-            while (BluetoothConnect.isBluetoothRunning()) {
-                val buffer = createByteArray()
-                val receivedData = getByteArrayFrom(inputStream, buffer)
-                if (receivedData.size == 0) break
-                val byteBuffer = createByteBufferFrom(receivedData)
-                updateStringBuffer()
-                saveBatteryDataFrom(byteBuffer)
-                saveStepCountDataFrom(byteBuffer)
-                saveSensorDataToString(byteBuffer)
-                saveOneAxisDataToCsv()
-                saveThreeDataToCsv()
+            try {
+                BluetoothConnect.createBluetoothSocket()
+                val inputStream = BluetoothConnect.createInputStream()
+
+                // 연결 성공 로그
+                CsvController.writeLog("SOCKET_CONNECTED: 워치와 새로운 연결 수립")
+                EventBus.getDefault().post(ThreadStateEvent(ThreadState.RUN))
+
+                while (BluetoothConnect.isBluetoothRunning()) {
+                    val buffer = createByteArray()
+                    val receivedData = getByteArrayFrom(inputStream, buffer)
+
+                    // 수신 데이터가 0이면 연결 종료로 간주
+                    if (receivedData.isEmpty()) {
+                        CsvController.writeLog("SOCKET_RECEIVE_EMPTY: 데이터 수신 결과가 0입니다. 루프 종료.")
+                        break
+                    }
+
+                    val byteBuffer = createByteBufferFrom(receivedData)
+                    updateStringBuffer()
+                    saveBatteryDataFrom(byteBuffer)
+                    saveStepCountDataFrom(byteBuffer)
+                    saveSensorDataToString(byteBuffer)
+                    saveOneAxisDataToCsv()
+                    saveThreeDataToCsv()
+                }
+            } catch (e: Exception) {
+                // 루프 내부 알 수 없는 에러 로그
+                CsvController.writeLog("SOCKET_LOOP_CRASH: ${e.message}")
+                break
             }
         }
     }
 
-    fun clear() {
-        updateStringBuffer()
+    // 데이터 수신 중 발생하는 에러 포착
+    private fun getByteArrayFrom(inputStream: InputStream, buffer: ByteArray): ByteArray {
+        return try {
+            when (val readBytes = inputStream.read(buffer)) {
+                -1 -> { // 소켓이 완전히 닫혔을 때
+                    CsvController.writeLog("SOCKET_STREAM_END: 워치에서 연결을 닫았습니다.")
+                    handleSocketError()
+                    BluetoothConnect.stopRunning()
+                    ByteArray(0)
+                }
+                0 -> { // 데이터가 잠시 안 들어올 때 (중요!)
+                    Log.d(tag.toString(), "Zero bytes read, skipping...")
+                    ByteArray(1) // 빈 배열이 아닌 1바이트라도 반환해서 루프를 유지시킴
+                }
+                else -> {
+                    buffer.copyOf(readBytes)
+                }
+            }
+        } catch (e: IOException) {
+            CsvController.writeLog("SOCKET_IO_EXCEPTION: ${e.message}")
+            handleSocketError()
+            BluetoothConnect.stopRunning()
+            ByteArray(0)
+        }
     }
 
-    private fun validateOneAxisDataType(dataType: Int): Boolean {
-        if (dataType == 5 || dataType == 18 || dataType == 21 || dataType == 30)
-            return true
-        return false
+    private fun handleSocketError() {
+        // [수정] 소켓 에러 발생 시 상태 로그 추가
+        CsvController.writeLog("HANDLE_SOCKET_ERROR: 소켓 에러 처리 시작")
+        EventBus.getDefault().post(SocketStateEvent(SocketState.CLOSE))
+        EventBus.getDefault().post(ThreadStateEvent(ThreadState.STOP))
+        clear()
     }
 
-    private fun validateBufferSize(byteBuffer: ByteBuffer): Boolean {
-        if ((byteBuffer.limit() - byteBuffer.position()) < 16)
-            return false
-        return true
-    }
-
-    private fun validateBufferSizeForOneAxisSensor(byteBuffer: ByteBuffer): Boolean {
-        if ((byteBuffer.limit() - byteBuffer.position()) < 4)
-            return false
-        return true
-    }
-
-    private fun validateBufferSizeForThreeAxisSensor(byteBuffer: ByteBuffer): Boolean {
-        if ((byteBuffer.limit() - byteBuffer.position()) < 12)
-            return false
-        return true
-    }
-
-    private fun validateSensorDataType(dataType: Int): Boolean {
-        if (dataType == 0)
-            return false
-        return true
-    }
-
-    private fun createByteArray(): ByteArray {
-        return ByteArray(968)
-    }
+    private fun createByteArray(): ByteArray = ByteArray(968)
 
     private fun createByteBufferFrom(receivedData: ByteArray): ByteBuffer {
         val byteBuffer = ByteBuffer.wrap(receivedData)
@@ -95,43 +109,34 @@ class AcceptThread(context: Context) : Thread() {
         return byteBuffer
     }
 
-    private fun getByteArrayFrom(inputStream: InputStream, buffer: ByteArray): ByteArray {
-        val receivedData: ByteArray
-        try {
-            receivedData = buffer.copyOf(inputStream.read(buffer))
-        } catch (e: IOException) {
-            handleSocketError()
-            BluetoothConnect.stopRunning()
-            return ByteArray(0)
-        }
-        return receivedData
-    }
-
     private fun saveSensorDataToString(byteBuffer: ByteBuffer) {
         while (byteBuffer.position() < byteBuffer.limit()) {
-            if (!validateBufferSize(byteBuffer))
-                break
+            if (!validateBufferSize(byteBuffer)) break
             saveEachSensorDataToString(byteBuffer)
         }
     }
 
     private fun saveEachSensorDataToString(byteBuffer: ByteBuffer) {
-        val dataType = byteBuffer.int
-        if (!validateSensorDataType(dataType)) return
-        val timestamp = byteBuffer.long
-        addOneAxisData(byteBuffer, dataType, timestamp)
-        addThreeAxisData(byteBuffer, dataType, timestamp)
+        try {
+            val dataType = byteBuffer.int
+            if (!validateSensorDataType(dataType)) return
+            val timestamp = byteBuffer.long
+            addOneAxisData(byteBuffer, dataType, timestamp)
+            addThreeAxisData(byteBuffer, dataType, timestamp)
+        } catch (e: Exception) {
+            CsvController.writeLog("PARSING_ERROR: ${e.message}")
+        }
     }
 
     private fun saveBatteryDataFrom(byteBuffer: ByteBuffer) {
+        if (byteBuffer.remaining() < 4) return
         val battery = byteBuffer.int
         DeviceInfo.setBattery(battery.toString())
-        Log.d("Battery", battery.toString())
     }
 
-    private fun saveStepCountDataFrom(byteBuffer: ByteBuffer){
+    private fun saveStepCountDataFrom(byteBuffer: ByteBuffer) {
+        if (byteBuffer.remaining() < 4) return
         val stepCount = byteBuffer.int
-        Log.d("stepCount", stepCount.toString())
         CoroutineScope(Dispatchers.IO).launch {
             sensorController.dataAccept(stepCount)
         }
@@ -139,17 +144,19 @@ class AcceptThread(context: Context) : Thread() {
 
     private fun saveOneAxisDataToCsv() {
         val oneAxisData = reconstructedOneAxisData.toString()
-        Log.d("OneAxisData", oneAxisData)
-        CoroutineScope(Dispatchers.IO).launch {
-            sensorController.dataAccept(oneAxisData)
+        if (oneAxisData.isNotEmpty()) {
+            CoroutineScope(Dispatchers.IO).launch {
+                sensorController.dataAccept(oneAxisData)
+            }
         }
     }
 
     private fun saveThreeDataToCsv() {
         val threeAxisData = reconstructedTreeAxisData.toString()
-        Log.d("ThreeAxisData", threeAxisData)
-        CoroutineScope(Dispatchers.IO).launch {
-            sensorController.dataAccept(threeAxisData)
+        if (threeAxisData.isNotEmpty()) {
+            CoroutineScope(Dispatchers.IO).launch {
+                sensorController.dataAccept(threeAxisData)
+            }
         }
     }
 
@@ -157,6 +164,12 @@ class AcceptThread(context: Context) : Thread() {
         reconstructedOneAxisData = StringBuilder()
         reconstructedTreeAxisData = StringBuilder()
     }
+
+    private fun validateOneAxisDataType(dataType: Int) = dataType in listOf(5, 18, 21, 30)
+    private fun validateSensorDataType(dataType: Int) = dataType != 0
+    private fun validateBufferSize(byteBuffer: ByteBuffer) = (byteBuffer.limit() - byteBuffer.position()) >= 16
+    private fun validateBufferSizeForOneAxisSensor(byteBuffer: ByteBuffer) = (byteBuffer.limit() - byteBuffer.position()) >= 4
+    private fun validateBufferSizeForThreeAxisSensor(byteBuffer: ByteBuffer) = (byteBuffer.limit() - byteBuffer.position()) >= 12
 
     private fun addOneAxisData(byteBuffer: ByteBuffer, dataType: Int, timestamp: Long) {
         if (!validateOneAxisDataType(dataType)) return
@@ -174,33 +187,15 @@ class AcceptThread(context: Context) : Thread() {
         addThreeAxisDataToString(dataType, timestamp, xAxisData, yAxisData, zAxisData)
     }
 
-    private fun addOneAxisDataToString(
-        dataType: Int,
-        timestamp: Long,
-        data: Float
-    ) {
-        reconstructedOneAxisData.append(dataType).append("|")
-        reconstructedOneAxisData.append(timestamp).append("|")
-        reconstructedOneAxisData.append(data).append(":")
+    private fun addOneAxisDataToString(dataType: Int, timestamp: Long, data: Float) {
+        reconstructedOneAxisData.append(dataType).append("|").append(timestamp).append("|").append(data).append(":")
     }
 
-    private fun addThreeAxisDataToString(
-        dataType: Int,
-        timestamp: Long,
-        xAxisData: Float,
-        yAxisData: Float,
-        zAxisData: Float
-    ) {
-        reconstructedTreeAxisData.append(dataType).append("|")
-        reconstructedTreeAxisData.append(timestamp).append("|")
-        reconstructedTreeAxisData.append(xAxisData).append("|")
-        reconstructedTreeAxisData.append(yAxisData).append("|")
-        reconstructedTreeAxisData.append(zAxisData).append(":")
+    private fun addThreeAxisDataToString(dataType: Int, timestamp: Long, x: Float, y: Float, z: Float) {
+        reconstructedTreeAxisData.append(dataType).append("|").append(timestamp).append("|").append(x).append("|").append(y).append("|").append(z).append(":")
     }
 
-    private fun handleSocketError() {
-        EventBus.getDefault().post(SocketStateEvent(SocketState.CLOSE))
-        EventBus.getDefault().post(ThreadStateEvent(ThreadState.STOP))
-        clear()
+    fun clear() {
+        updateStringBuffer()
     }
 }

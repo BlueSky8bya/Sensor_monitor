@@ -17,25 +17,34 @@ object CsvController {
     /**
      * 앱의 주요 이벤트나 에러를 파일로 남기는 함수
      */
+    // CsvController.kt 수정
     fun writeLog(message: String) {
-        val basePath = getDownloadPath()
-        val logDir = File(basePath, "sensor_data/logs")
-        if (!logDir.exists()) logDir.mkdirs()
-
-        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-        val timestamp = sdf.format(Date())
-        val fileName = "app_debug_log_${SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())}.txt"
-        val logFile = File(logDir, fileName)
-
         try {
-            // true: 이어쓰기(Append) 모드
-            val writer = BufferedWriter(FileWriter(logFile, true))
-            writer.write("[$timestamp] $message")
-            writer.newLine()
-            writer.flush()
-            writer.close()
+            val basePath = getDownloadPath()
+            val logDir = File(basePath, "sensor_data/logs")
+
+            // 1. 폴더가 없으면 생성 시도
+            if (!logDir.exists()) {
+                val created = logDir.mkdirs()
+                if (!created) {
+                    Log.e(TAG, "Log directory creation failed")
+                    return
+                }
+            }
+
+            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+            val timestamp = sdf.format(Date())
+            val dateStr = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
+            val fileName = "app_debug_log_${dateStr}.txt"
+            val logFile = File(logDir, fileName)
+
+            // 2. BufferedWriter.use 블록을 사용하여 자동 Flush & Close 보장
+            FileWriter(logFile, true).buffered().use { writer ->
+                writer.appendLine("[$timestamp] $message")
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "로그 파일 저장 실패: ${e.message}")
+            // 파일 쓰기 실패 시 로그캣이라도 남겨서 원인을 파악합니다.
+            Log.e(TAG, "CRITICAL: Log file write failed: ${e.message}", e)
         }
     }
 
@@ -48,25 +57,32 @@ object CsvController {
     fun getSensorDirectory(sensorName: String): File {
         val sensorType = sensorName.split("_").getOrNull(0) ?: "Unknown"
         val basePath = getDownloadPath()
-        // File(부모, 자식) 구조를 쓰면 중간에 /가 누락되어 'storage' 폴더가 생기는 일을 막을 수 있음
-        val dir = File(basePath, "sensor_data/$sensorType")
+        val sensorDataDir = File(basePath, "sensor_data")
+        if (!sensorDataDir.exists()) sensorDataDir.mkdirs() // sensor_data 폴더 먼저 확인
+
+        val dir = File(sensorDataDir, sensorType)
         if (!dir.exists()) {
-            dir.mkdirs() // mkdir() 대신mkdirs() 사용
+            dir.mkdirs()
+            writeLog("DIRECTORY_CREATED: $sensorType")
         }
         return dir
     }
 
-    // [수정] 현재 시간을 고정된 형식으로 가져오거나, 기존 파일을 찾도록 개선
+    // 현재 시간을 고정된 형식으로 가져오거나, 기존 파일을 찾도록 개선
     private fun setFileName(sensorName: String): String {
-        // yyyyMMdd_HHmm 형식 (예: 20260318_1450)
-        val sdf = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault())
+        // yyyyMMdd_HHmmss 형식으로 포맷 변경 (예: 20260318_163005)
+        val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
         val date = sdf.format(Date())
         return "${sensorName}_${date}.csv"
     }
 
     // [추가] SensorActivity와 LoginActivity에서 호출하는 함수 정의
     fun deleteFilesInDirectory(dirPath: String) {
-        val dir = File(dirPath)
+        // [보강] 데이터 유실 방지를 위해 실제 삭제 로직을 봉인하고 로그만 남깁니다.
+        Log.w(TAG, "WARNING: deleteFilesInDirectory 호출됨 (무시됨) - 경로: $dirPath")
+        writeLog("누가 지우려고 해요: $dirPath")
+
+        /*val dir = File(dirPath)
         if (dir.exists() && dir.isDirectory) {
             dir.listFiles()?.forEach { file ->
                 if (file.isDirectory) {
@@ -77,7 +93,7 @@ object CsvController {
             }
             dir.delete() // 필요 시 폴더 자체도 삭제, 파일만 지우려면 이 줄 제외
             Log.d(TAG, "Successfully deleted: $dirPath")
-        }
+        }*/
     }
 
 //    // [보강] 기존 getExistFileName의 안정성 (orEmpty 처리)

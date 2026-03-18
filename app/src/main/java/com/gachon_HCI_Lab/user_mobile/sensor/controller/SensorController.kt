@@ -216,17 +216,17 @@ class SensorController(context: Context) {
             }
         }
 
-        // 4. 추출한 데이터를 다시 쓰지 않도록 DB를 즉시 비웁니다.
-        withContext(Dispatchers.IO) {
-            if (type == "OneAxis") {
-                oneAxisDataService.deleteAll()
-                // 커서(페이지네이션 기록)도 초기화해주는 것이 안전합니다.
-                prefManager.putCursor("oneAxis", 0)
-            } else {
-                threeAxisDataService.deleteAll()
-                prefManager.putCursor("threeAxis", 0)
-            }
-        }
+//        // 4. 추출한 데이터를 다시 쓰지 않도록 DB를 즉시 비웁니다.
+//        withContext(Dispatchers.IO) {
+//            if (type == "OneAxis") {
+//                oneAxisDataService.deleteAll()
+//                // 커서(페이지네이션 기록)도 초기화해주는 것이 안전합니다.
+//                prefManager.putCursor("oneAxis", 0)
+//            } else {
+//                threeAxisDataService.deleteAll()
+//                prefManager.putCursor("threeAxis", 0)
+//            }
+//        }
         Log.d("SensorController", "$type DB Cleared (Success)")
     }
 
