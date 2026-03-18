@@ -55,16 +55,11 @@ object CsvController {
         }
         return dir
     }
-// 파일명에 '초'단위 시간을 넣었는데, 지금은 날짜 단위(setFileName) 사용 [테스트 중]
-//    private fun getTime(): String {
-//        return (System.currentTimeMillis() / 1000L).toString()
-//    }
 
     // [수정] 현재 시간을 고정된 형식으로 가져오거나, 기존 파일을 찾도록 개선
     private fun setFileName(sensorName: String): String {
-        // 파일명에서 시간초를 빼고 센서 이름만 사용하거나,
-        // 혹은 날짜까지만 포함해서 '하루 단위'로 파일을 묶는 것이 관리에 유리합니다.
-        val sdf = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
+        // yyyyMMdd_HHmm 형식 (예: 20260318_1450)
+        val sdf = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault())
         val date = sdf.format(Date())
         return "${sensorName}_${date}.csv"
     }
