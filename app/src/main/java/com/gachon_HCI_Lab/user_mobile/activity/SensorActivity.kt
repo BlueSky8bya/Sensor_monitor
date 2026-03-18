@@ -93,9 +93,9 @@ class SensorActivity : AppCompatActivity() {
 
         binding.BtnLogout.setOnClickListener {
             CacheManager.deleteCacheFile(this, "login.txt")
-            sensorController.deleteAll()
-            val sensorRootPath = File(CsvController.getDownloadPath(), "sensor_data").absolutePath
-            CsvController.deleteFilesInDirectory(sensorRootPath)
+            // sensorController.deleteAll() // <- 데이터 보존을 위해 주석 처리
+            // val sensorRootPath = File(CsvController.getDownloadPath(), "sensor_data").absolutePath
+            // CsvController.deleteFilesInDirectory(sensorRootPath) // <- 데이터 보존을 위해 주석 처리
 
             startActivity(Intent(this, LoginActivity::class.java))
             finish()

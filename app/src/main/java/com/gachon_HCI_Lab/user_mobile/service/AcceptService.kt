@@ -54,6 +54,7 @@ import java.util.TimerTask
  * 웨어러블을 통해 수집된 데이터를 폰을 통해 수집 및 서버 전송
  */
 class AcceptService : Service() {
+    private var writeCount = 0
     private lateinit var bluetoothManager: BluetoothManager
     private lateinit var bluetoothAdapter: BluetoothAdapter
     private lateinit var acceptThread: AcceptThread
@@ -150,34 +151,26 @@ class AcceptService : Service() {
     }
 
     private fun csvWrite(time: Long) {
-        // ── [수정] 핵심: 기존 타이머가 있다면 확실히 취소하고 초기화 ──
         timer?.cancel()
         timer = null
-
-        var count = 0
+        // var count = 0 // 여기서 삭제
         timer = Timer()
-
-        // scheduleAtFixedRate를 사용하여 연결 지연과 상관없이 최대한 고정 주기를 유지합니다.
         timer?.schedule(object : TimerTask() {
             override fun run() {
                 CoroutineScope(Dispatchers.IO).launch {
-                    // isConnected 체크는 유지하되, 로그를 남겨서 상태를 확인합니다.
                     if (isConnected) {
-                        Log.d(tag, "5분 주기 CSV 쓰기 시작")
                         sensorController.writeCsv("OneAxis")
                         sensorController.writeCsv("ThreeAxis")
 
-                        count++
-                        if (count >= 6) { // 30분 경과
+                        writeCount++ // 멤버 변수 사용
+                        if (writeCount >= 6) {
                             sendCSV()
-                            count = 0
+                            writeCount = 0
                         }
-                    } else {
-                        Log.w(tag, "워치 연결이 끊겨 있어 이번 주기(5분)는 저장을 건너뜁니다.")
                     }
                 }
             }
-        }, time, time) // 첫 실행도 5분 뒤부터 시작
+        }, time, time)
     }
 
     /**
