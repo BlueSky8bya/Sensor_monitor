@@ -65,7 +65,7 @@ object CsvController {
     }
 
     /**
-     * [수정] 파편 파일명 생성 로직
+     * 파편 파일명 생성 로직
      * yyyyMMdd -> yyMMdd로 변경하여 병합 로직과 일관성 유지
      * (예: Accelerometer_260319_204501.csv)
      */
@@ -73,11 +73,6 @@ object CsvController {
         val sdf = SimpleDateFormat("yyMMdd_HHmmss", Locale.getDefault())
         val date = sdf.format(Date())
         return "${sensorName}_${date}.csv"
-    }
-
-    fun deleteFilesInDirectory(dirPath: String) {
-        Log.w(TAG, "WARNING: deleteFilesInDirectory 호출됨 (무시됨) - 경로: $dirPath")
-        writeLog("누가 지우려고 해요: $dirPath")
     }
 
     fun csvSave(sensorName: String, abstractSensorSet: List<AbstractSensor>) {
