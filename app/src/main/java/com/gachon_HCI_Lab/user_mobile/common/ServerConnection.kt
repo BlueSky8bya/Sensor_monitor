@@ -2,7 +2,6 @@ package com.gachon_HCI_Lab.user_mobile.common
 
 import android.app.Activity
 import android.content.Intent
-import android.os.Environment
 import android.util.Log
 import com.gachon_HCI_Lab.user_mobile.activity.SensorActivity
 import okhttp3.*
@@ -14,10 +13,10 @@ import java.util.concurrent.TimeUnit
 
 abstract class ServerConnection {
     companion object {
-        private val tag = "Server Connection"
-        private val requestUrl = "http://114.70.120.121:443/forUser/postCurrentData/"
+        private const val TAG = "Server Connection"
+        private const val REQUEST_URL = "http://114.70.120.121:443/forUser/postCurrentData/"
         // [중요] 로그인 주소가 반드시 정의되어 있어야 합니다.
-        private val loginURL = "http://114.70.120.121:443/forUser/registUser/"
+        private const val LOGIN_URL = "http://114.70.120.121:443/forUser/registUser/"
 
         // 클라이언트를 싱글톤으로 관리 (메모리 효율)
         private val client = OkHttpClient.Builder()
@@ -33,7 +32,7 @@ abstract class ServerConnection {
             val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
             val strDate: String = dateFormat.format(Date())
 
-            val httpBuilder = HttpUrl.parse(loginURL)?.newBuilder()?.apply {
+            val httpBuilder = HttpUrl.parse(LOGIN_URL)?.newBuilder()?.apply {
                 addQueryParameter("userID", authcode)
                 addQueryParameter("deviceID", deviceID)
                 addQueryParameter("regID", regID)
@@ -41,7 +40,7 @@ abstract class ServerConnection {
             }
 
             if (httpBuilder == null) {
-                Log.e(tag, "URL 생성 실패")
+                Log.e(TAG, "URL 생성 실패")
                 return
             }
 
@@ -51,7 +50,7 @@ abstract class ServerConnection {
 
             client.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
-                    Log.e(tag, "Login 실패: ${e.message}")
+                    Log.e(TAG, "Login 실패: ${e.message}")
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         android.widget.Toast.makeText(context, "네트워크 연결 실패", android.widget.Toast.LENGTH_SHORT).show()
                     }
@@ -59,7 +58,7 @@ abstract class ServerConnection {
 
                 override fun onResponse(call: Call, response: Response) {
                     if (response.code() == 200) {
-                        Log.d(tag, "Login 성공")
+                        Log.d(TAG, "Login 성공")
                         CacheManager.saveCacheFile(context, authcode, "login.txt")
 
                         val intent = Intent(context, SensorActivity::class.java).apply {
@@ -89,19 +88,19 @@ abstract class ServerConnection {
                 .addFormDataPart("timestamp", timestamp)
                 .build()
 
-            val request = Request.Builder().url(requestUrl).post(requestBody).build()
+            val request = Request.Builder().url(REQUEST_URL).post(requestBody).build()
 
             client.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
                     val errorMessage = "Network Error: ${e.message}"
-                    Log.e(tag, errorMessage)
+                    Log.e(TAG, errorMessage)
                     saveErrorLog(errorMessage)
                     onResult(false)
                 }
 
                 override fun onResponse(call: Call, response: Response) {
                     if (response.isSuccessful) {
-                        Log.d(tag, "전송 성공: ${response.code()}")
+                        Log.d(TAG, "전송 성공: ${response.code()}")
                         onResult(true)
                     } else {
                         saveErrorLog("Server Error: ${response.code()}")
@@ -113,14 +112,7 @@ abstract class ServerConnection {
         }
 
         fun saveErrorLog(errorMessage: String) {
-            val logFile = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Error_Log.txt")
-            try {
-                FileWriter(logFile, true).use { writer ->
-                    writer.append("${Date()}: $errorMessage\n")
-                }
-            } catch (e: IOException) {
-                Log.e("FileLogger", "Error writing log file: ${e.message}")
-            }
+            CsvController.writeLog("SERVER_ERROR: $errorMessage")
         }
     }
 }

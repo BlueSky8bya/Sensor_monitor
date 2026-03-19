@@ -200,7 +200,7 @@ class AcceptService : Service() {
                 file.name.endsWith(".csv") &&
                         file.name.contains(sensor.value) &&
                         !file.name.contains("merged") &&
-                        file.name.contains(Regex("\\d{8}_\\d+"))
+                        file.name.contains(Regex("\\d{6}_\\d+"))
             } ?: continue
 
             if (allFiles.isNotEmpty()) {
