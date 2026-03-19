@@ -31,39 +31,56 @@ class AcceptThread(context: Context) : Thread() {
     }
 
     override fun run() {
-        BluetoothConnect.createSeverSocket()
-        while(true) {
-            try {
-                BluetoothConnect.createBluetoothSocket()
-                val inputStream = BluetoothConnect.createInputStream()
+        try {
+            CsvController.writeLog("THREAD_START: 수신 스레드 루프 진입")
+            BluetoothConnect.createSeverSocket()
 
-                // 연결 성공 로그
-                CsvController.writeLog("SOCKET_CONNECTED: 워치와 새로운 연결 수립")
-                EventBus.getDefault().post(ThreadStateEvent(ThreadState.RUN))
+            while (true) {
+                try {
+                    BluetoothConnect.createBluetoothSocket()
+                    val inputStream = BluetoothConnect.createInputStream()
 
-                while (BluetoothConnect.isBluetoothRunning()) {
-                    val buffer = createByteArray()
-                    val receivedData = getByteArrayFrom(inputStream, buffer)
+                    // 연결 성공 로그
+                    CsvController.writeLog("SOCKET_CONNECTED: 워치와 새로운 연결 수립")
+                    EventBus.getDefault().post(ThreadStateEvent(ThreadState.RUN))
 
-                    // 수신 데이터가 0이면 연결 종료로 간주
-                    if (receivedData.isEmpty()) {
-                        CsvController.writeLog("SOCKET_RECEIVE_EMPTY: 데이터 수신 결과가 0입니다. 루프 종료.")
-                        break
+                    while (BluetoothConnect.isBluetoothRunning()) {
+                        val buffer = createByteArray()
+                        val receivedData = getByteArrayFrom(inputStream, buffer)
+
+                        // 수신 데이터가 비어있으면 (블루투스 소켓이 끊긴 신호)
+                        if (receivedData.isEmpty()) {
+                            CsvController.writeLog("SOCKET_RECEIVE_EMPTY: 데이터 수신 결과가 0입니다. 내부 루프 종료.")
+                            break
+                        }
+
+                        val byteBuffer = createByteBufferFrom(receivedData)
+                        updateStringBuffer()
+                        saveBatteryDataFrom(byteBuffer)
+                        saveStepCountDataFrom(byteBuffer)
+                        saveSensorDataToString(byteBuffer)
+                        saveOneAxisDataToCsv()
+                        saveThreeDataToCsv()
                     }
 
-                    val byteBuffer = createByteBufferFrom(receivedData)
-                    updateStringBuffer()
-                    saveBatteryDataFrom(byteBuffer)
-                    saveStepCountDataFrom(byteBuffer)
-                    saveSensorDataToString(byteBuffer)
-                    saveOneAxisDataToCsv()
-                    saveThreeDataToCsv()
+                    // 내부 루프를 빠져나왔을 때 (break)
+                    CsvController.writeLog("SOCKET_LOOP_BREAK: BluetoothRunning 상태가 아니거나 수신 데이터가 없어 루프를 탈출함")
+
+                } catch (e: Exception) {
+                    // 개별 연결 시도의 에러 로그
+                    CsvController.writeLog("SOCKET_IO_EXCEPTION: 연결 유지 중 에러 발생 - ${e.message}")
+                    // 여기서 break를 하지 않고 다시 위로 올라가서 재연결을 시도하게 할 수도 있습니다.
+                    // 만약 무한 재연결을 원치 않으시면 아래 break를 유지하세요.
+                    break
                 }
-            } catch (e: Exception) {
-                // 루프 내부 알 수 없는 에러 로그
-                CsvController.writeLog("SOCKET_LOOP_CRASH: ${e.message}")
-                break
             }
+        } catch (e: Exception) {
+            // 최상위 루프 자체가 터졌을 때 (심각한 메모리 오류 등)
+            CsvController.writeLog("CRITICAL_THREAD_ERROR: 최상위 루프 사망 - ${e.message}")
+        } finally {
+            // [핵심] 어떤 이유로든 스레드가 끝날 때 무조건 실행됨
+            CsvController.writeLog("THREAD_TERMINATED: AcceptThread가 완전히 종료되었습니다.")
+            EventBus.getDefault().post(ThreadStateEvent(ThreadState.STOP))
         }
     }
 

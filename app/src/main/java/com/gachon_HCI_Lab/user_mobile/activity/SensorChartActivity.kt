@@ -59,6 +59,7 @@ class SensorChartActivity : AppCompatActivity() {
         binding = ActivityChartBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        // 1. 차트 초기화 (XML 순서에 맞춰 Gravity를 하단으로)
         ppgGreenChart = binding.chartPpgGreen
         heartRateChart = binding.chartHeart
         lightChart = binding.chartLight
@@ -66,13 +67,46 @@ class SensorChartActivity : AppCompatActivity() {
         gyroscopeChart = binding.chartGyroscope
         gravityChart = binding.chartGravity
 
-        val charts = listOf(ppgGreenChart, heartRateChart, lightChart, accelerometerChart, gyroscopeChart, gravityChart)
+        val charts = listOf(
+            ppgGreenChart, heartRateChart, lightChart,
+            accelerometerChart, gyroscopeChart, gravityChart
+        )
+
         charts.forEach { chart ->
             chart.xAxis.position = XAxis.XAxisPosition.BOTTOM
             chart.xAxis.valueFormatter = LineChartXAxisValueFormatter()
-            chart.description.isEnabled = false // 설명 텍스트 제거 (깔끔하게)
-        }
+            chart.description.isEnabled = false
 
+            chart.setNoDataText("데이터 수신 대기 중...")
+            chart.setNoDataTextColor(Color.GRAY)
+
+            // --- [디자인 수정 적용] ---
+
+            // 1. X축 레이블 각도 회전 (공백 명확히 유지)
+            chart.xAxis.labelRotationAngle = -45f
+
+            // 2. 레이블 출력 갯수 제한
+            chart.xAxis.setLabelCount(6, false)
+
+            // 3. 레이블 잘림 방지 및 간격 조정
+            chart.xAxis.setAvoidFirstLastClipping(true)
+            chart.xAxis.yOffset = 10f
+
+            // 4. 차트 하단 여백 추가 (회전된 텍스트 공간 확보)
+            chart.setExtraOffsets(0f, 0f, 0f, 30f)
+
+            // 5. 텍스트 디자인 (sp 대신 Float 값 사용)
+            chart.xAxis.textColor = Color.DKGRAY
+            chart.xAxis.textSize = 10f // 10sp 대신 10f로 수정
+
+            // 6. 데이터가 이미 있을 경우 (Gap 처리 유지)
+            chart.data?.dataSets?.forEach { dataSet ->
+                if (dataSet is LineDataSet) {
+                    dataSet.setDrawCircles(true)
+                    dataSet.circleRadius = 1.5f
+                }
+            }
+        }
         makeBufferChart()
         this.onBackPressedDispatcher.addCallback(this, callback)
     }
@@ -107,7 +141,7 @@ class SensorChartActivity : AppCompatActivity() {
 
         for (data in sensorData) {
             val time = data.time / 1000L
-            val dif = startTime - time // 절대값(abs) 대신 직접 차이 계산
+            val dif = startTime - time
             val idx = (dif / bin).toInt()
 
             if (idx in 0 until size) {
@@ -117,17 +151,21 @@ class SensorChartActivity : AppCompatActivity() {
             }
         }
 
-        for (i in 0 until sensorTemp.size) {
-            val yVal = if (count[i] == 0) 0f else (sensorTemp[i].second / count[i]).toFloat()
-            bufferQueue.add(Entry(sensorTemp[i].first.toFloat(), yVal))
+        for (i in 0 until size) {
+            // [데이터 투명성] 데이터가 수집된 구간만 Entry 추가 (0f 강제 주입 제거)
+            if (count[i] > 0) {
+                val yVal = (sensorTemp[i].second / count[i]).toFloat()
+                bufferQueue.add(Entry(sensorTemp[i].first.toFloat(), yVal))
+            }
         }
 
-        // 안전한 문자열 매칭 (contains 활용)
-        runOnUiThread {
-            when {
-                sensorName.contains("Light", true) -> updateChart(lightChart, bufferQueue, "Light")
-                sensorName.contains("Heart", true) -> updateChart(heartRateChart, bufferQueue, "HeartRate")
-                sensorName.contains("Ppg", true) -> updateChart(ppgGreenChart, bufferQueue, "PPG Green")
+        if (bufferQueue.isNotEmpty()) {
+            runOnUiThread {
+                when {
+                    sensorName.contains("Light", true) -> updateChart(lightChart, bufferQueue, "Light")
+                    sensorName.contains("Heart", true) -> updateChart(heartRateChart, bufferQueue, "HeartRate")
+                    sensorName.contains("Ppg", true) -> updateChart(ppgGreenChart, bufferQueue, "PPG Green")
+                }
             }
         }
     }
@@ -163,31 +201,35 @@ class SensorChartActivity : AppCompatActivity() {
         }
 
         for (i in 0 until size) {
-            for (j in 0..2) {
-                val yVal = if (count[i] == 0) 0f else (sensorTemps[j][i].second / count[i]).toFloat()
-                bufferQueues[j].add(Entry(sensorTemps[j][i].first.toFloat(), yVal))
+            // [데이터 투명성] 데이터가 존재하는 구간만 차트에 추가
+            if (count[i] > 0) {
+                for (j in 0..2) {
+                    val yVal = (sensorTemps[j][i].second / count[i]).toFloat()
+                    bufferQueues[j].add(Entry(sensorTemps[j][i].first.toFloat(), yVal))
+                }
             }
         }
 
-        val dataset = ArrayList<ILineDataSet>().apply {
-            add(makeLineDataSet(bufferQueues[0], "X").apply { color = Color.RED; setDrawCircles(false) })
-            add(makeLineDataSet(bufferQueues[1], "Y").apply { color = Color.GREEN; setDrawCircles(false) })
-            add(makeLineDataSet(bufferQueues[2], "Z").apply { color = Color.BLUE; setDrawCircles(false) })
-        }
+        if (bufferQueues[0].isNotEmpty()) {
+            val dataset = ArrayList<ILineDataSet>().apply {
+                add(makeLineDataSet(bufferQueues[0], "X").apply { color = Color.RED; setDrawCircles(true); circleRadius = 1.5f })
+                add(makeLineDataSet(bufferQueues[1], "Y").apply { color = Color.GREEN; setDrawCircles(true); circleRadius = 1.5f })
+                add(makeLineDataSet(bufferQueues[2], "Z").apply { color = Color.BLUE; setDrawCircles(true); circleRadius = 1.5f })
+            }
 
-        // [핵심 수정] Gravity 포함 여부 확인 및 UI 업데이트
-        runOnUiThread {
-            when {
-                sensorName.contains("Accelerometer", true) -> setChartData(dataset, accelerometerChart)
-                sensorName.contains("Gyroscope", true) -> setChartData(dataset, gyroscopeChart)
-                sensorName.contains("Gravity", true) -> setChartData(dataset, gravityChart)
+            runOnUiThread {
+                when {
+                    sensorName.contains("Accelerometer", true) -> setChartData(dataset, accelerometerChart)
+                    sensorName.contains("Gyroscope", true) -> setChartData(dataset, gyroscopeChart)
+                    sensorName.contains("Gravity", true) -> setChartData(dataset, gravityChart)
+                }
             }
         }
     }
 
     private fun updateChart(chart: LineChart, dataList: ArrayDeque<Entry>, label: String) {
         val dataset = ArrayList<ILineDataSet>().apply {
-            add(makeLineDataSet(dataList, label).apply { setDrawCircles(false) })
+            add(makeLineDataSet(dataList, label).apply { setDrawCircles(true); circleRadius = 1.5f })
         }
         setChartData(dataset, chart)
     }
@@ -196,9 +238,7 @@ class SensorChartActivity : AppCompatActivity() {
         timer = Timer()
         timer?.schedule(object : TimerTask() {
             override fun run() {
-                // GlobalScope 대신 CoroutineScope(Dispatchers.IO) 사용 권장
                 CoroutineScope(Dispatchers.IO).launch {
-                    // bin=10 (10초 단위 요약)으로 변경하여 Gravity 데이터가 더 잘 보이게 조정
                     getSensorData("OneAxis", 10, 10 * 60)
                     getSensorData("ThreeAxis", 10, 10 * 60)
                 }
@@ -207,9 +247,11 @@ class SensorChartActivity : AppCompatActivity() {
     }
 
     private fun makeLineDataSet(dataList : ArrayDeque<Entry>, name :String): LineDataSet {
+        // toList()를 사용하여 실시간 데이터 스냅샷을 생성
         return LineDataSet(dataList.toList(), name).apply {
             lineWidth = 1.5f
-            setDrawValues(false) // 차트 위 숫자 제거
+            setDrawValues(false)
+            setDrawCircles(true) // 데이터 포인트를 명확히 시각화
         }
     }
 

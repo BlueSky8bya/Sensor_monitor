@@ -13,11 +13,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
-import android.os.VibrationEffect
-import android.os.Vibrator
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
@@ -40,9 +36,6 @@ import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
 import org.greenrobot.eventbus.ThreadMode
 import java.io.File
-import java.io.FileWriter
-import java.io.IOException
-import java.util.Date
 import java.util.Timer
 import java.util.TimerTask
 
@@ -183,50 +176,71 @@ class AcceptService : Service() {
         val downloadBasePath = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
         CsvController.writeLog("DEBUG: sendCSV 병합 프로세스 시작")
 
+        // 1. 현재 시스템 시간 기준으로 파일명에 들어갈 '고정된' 시간 계산
+        val calendar = java.util.Calendar.getInstance()
+        val minute = calendar.get(java.util.Calendar.MINUTE)
+
+        // 30분 단위로 '내림' 처리하여 파일명 고정 (예: 31분 -> 30분, 05분 -> 00분)
+        val fixedMinute = if (minute >= 30) "30" else "00"
+        val dateFormat = java.text.SimpleDateFormat("yyMMdd", java.util.Locale.getDefault())
+        val hourFormat = java.text.SimpleDateFormat("HH", java.util.Locale.getDefault())
+
+        val dateStr = dateFormat.format(calendar.time)
+        val hourStr = hourFormat.format(calendar.time)
+        val timeStamp = "${hourStr}${fixedMinute}" // 예: 1600, 1830
+
         for (sensor in SensorEnum.values()) {
             val sensorType = sensor.value.split("_").getOrNull(0) ?: continue
             val sensorDir = File("$downloadBasePath/sensor_data/$sensorType")
             val sendedDir = File(sensorDir, "sended")
             if (!sendedDir.exists()) sendedDir.mkdirs()
 
-            // 1. 파편 파일 필터링
+            // 2. 파편 파일 필터링 (기존 로직 유지)
             val allFiles = sensorDir.listFiles()?.filter { file ->
                 file.name.endsWith(".csv") &&
                         file.name.contains(sensor.value) &&
-                        !file.name.contains("M_") &&
+                        !file.name.contains("merged") &&
                         file.name.contains(Regex("\\d{8}_\\d+"))
             } ?: continue
 
-            // 2. 파일이 하나라도 있으면 병합 시도 (시간 기준이므로 개수 제한 해제)
             if (allFiles.isNotEmpty()) {
                 val sortedFiles = allFiles.sortedBy { it.name }
-                val targetTime = sortedFiles.last().name.substringAfterLast("_").substringBefore(".csv")
-                val mergedFileName = "${sensor.value}_${targetTime}_merged.csv"
+
+                // [수정 포인트] 요청하신 파일명 형식 적용: sensor.value_YYMMDD_HHmm.csv
+                val mergedFileName = "${sensor.value}_${dateStr}_${timeStamp}.csv"
                 val mergedFile = File(sensorDir, mergedFileName)
 
                 try {
+                    // 3. 병합 실행 (스트림 처리)
                     mergedFile.bufferedWriter().use { writer ->
                         for (file in sortedFiles) {
                             file.bufferedReader().use { reader ->
                                 reader.lineSequence().forEachIndexed { index, line ->
+                                    // 첫 번째 파일이 아니면 헤더(첫 줄) 생략
                                     if (index == 0 && file != sortedFiles.first()) return@forEachIndexed
                                     writer.write(line)
                                     writer.newLine()
                                 }
                             }
-                            delay(10) // I/O 부하 분산
+                            delay(10)
                         }
                     }
 
-                    // 원본 삭제 및 이동
-                    sortedFiles.forEach { it.delete() }
+                    // 4. 이동 시도 (sended 폴더로)
                     val destFile = File(sendedDir, mergedFileName)
+
                     if (mergedFile.renameTo(destFile)) {
-                        CsvController.writeLog("SUCCESS: $mergedFileName 병합 및 이동 완료")
+                        CsvController.writeLog("SUCCESS: $mergedFileName 생성 및 이동 완료.")
+                        sortedFiles.forEach { it.delete() }
+                    } else {
+                        CsvController.writeLog("ERROR: $mergedFileName 이동 실패. 병합본 삭제.")
+                        if (mergedFile.exists()) mergedFile.delete()
                     }
-                    delay(300) // 센서 간 간격
+
+                    delay(300)
                 } catch (e: Exception) {
-                    CsvController.writeLog("ERROR: 병합 실패 - ${e.message}")
+                    CsvController.writeLog("ERROR: 병합 중 예외 발생 (${sensor.value}) - ${e.message}")
+                    if (mergedFile.exists()) mergedFile.delete()
                 }
             }
         }
@@ -253,42 +267,6 @@ class AcceptService : Service() {
                 }
             }
         }, checkPeriod, checkPeriod)
-    }
-
-    private fun recordBatteryLevel(batteryLevel: Int) {
-        val path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val logFile = File(path, "battery.txt")
-        try {
-            FileWriter(logFile, true).use { it.appendLine("Battery Level: $batteryLevel% at ${Date()}") }
-
-            if (batteryLevel <= 10) {
-                // UI 작업은 메인 스레드에서 실행되도록 보장
-                Handler(Looper.getMainLooper()).post {
-                    val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        val vibratorManager = getSystemService(VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager
-                        vibratorManager.defaultVibrator
-                    } else {
-                        @Suppress("DEPRECATION")
-                        getSystemService(VIBRATOR_SERVICE) as Vibrator
-                    }
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        vibrator.vibrate(VibrationEffect.createOneShot(2500, VibrationEffect.DEFAULT_AMPLITUDE))
-                    } else {
-                        @Suppress("DEPRECATION")
-                        vibrator.vibrate(2500)
-                    }
-
-                    Toast.makeText(this, "배터리가 부족합니다. 충전해주세요.", Toast.LENGTH_SHORT).show()
-                }
-
-                Handler(Looper.getMainLooper()).postDelayed({
-                    Toast.makeText(this, "워치를 재착용하고 측정을 재시작 해주세요.", Toast.LENGTH_LONG).show()
-                }, 90 * 60 * 1000)
-            }
-        } catch (e: IOException) {
-            Log.e(tag, "Battery log error: ${e.message}")
-        }
     }
 
     @Subscribe(threadMode = ThreadMode.BACKGROUND)
