@@ -1,62 +1,107 @@
 package com.gachon_HCI_Lab.user_mobile.activity
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.gachon_HCI_Lab.user_mobile.common.BTManager
 import com.gachon_HCI_Lab.user_mobile.common.CacheManager
-import com.gachon_HCI_Lab.user_mobile.common.CsvController
 import com.gachon_HCI_Lab.user_mobile.common.ServerConnection
 import com.gachon_HCI_Lab.user_mobile.databinding.ActivityLoginBinding
-import java.io.File
 import androidx.core.net.toUri
+import androidx.core.content.edit
 
 class LoginActivity : AppCompatActivity() {
     private lateinit var binding: ActivityLoginBinding
-    private var isBatteryConfigDone = false
     private var isShowingDialog = false
+    private val PREFS_NAME = "AppSetupPrefs"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityLoginBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
-        cleanOldSensorData()
     }
 
     override fun onResume() {
         super.onResume()
+        if (isShowingDialog) return
+
         val pm = getSystemService(POWER_SERVICE) as PowerManager
-        isBatteryConfigDone = pm.isIgnoringBatteryOptimizations(packageName)
+        val isBatteryOptimized = pm.isIgnoringBatteryOptimizations(packageName)
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val isHibernationGuideShown = prefs.getBoolean("hibernation_shown", false)
 
-        val deviceID = fetchDeviceID()
-        setupLoginLogic(deviceID)
-
-        // 1순위: 배터리 설정이 안 되어 있다면 배터리 팝업
-        if (!isBatteryConfigDone) {
-            if (!isShowingDialog) showBatteryOptimizationDialog()
+        // [순차적 가이드 로직] - 앞 단계가 완료되지 않으면 절대 뒤로 넘어가지 않음
+        when {
+            // [1단계] 배터리 최적화 제외 설정
+            !isBatteryOptimized -> {
+                showBatteryOptimizationDialog()
+            }
+            // [2단계] 사용하지 않는 앱 관리 (1회만 유도)
+            !isHibernationGuideShown -> {
+                showAppHibernationDialog()
+            }
+            // [3단계] 필수 시스템 권한 (위치, 블루투스 등) 일괄 요청
+            !hasRequiredPermissions() -> {
+                requestRequiredPermissions()
+            }
+            // [4단계] 모든 세팅 완료 -> 기기 ID 획득 및 로그인 활성화
+            else -> {
+                val deviceID = fetchDeviceID()
+                setupLoginLogic(deviceID)
+            }
         }
-        // 2순위: 배터리는 됐는데 '사용하지 않는 앱 관리' 안내가 필요할 때 (선택 사항이지만 권장)
-        // 이 팝업은 사용자가 직접 꺼야 하므로, 배터리 설정이 완료된 직후 한 번만 띄우는 것이 좋습니다.
     }
 
-    /**
-     * [1단계] 배터리 제한 없음 설정 안내
-     */
+    private fun hasRequiredPermissions(): Boolean {
+        val permissions = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        return permissions.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requestRequiredPermissions() {
+        val permissions = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        ActivityCompat.requestPermissions(this, permissions.toTypedArray(), 100)
+    }
+
     @SuppressLint("BatteryLife")
     private fun showBatteryOptimizationDialog() {
         isShowingDialog = true
-        val message = "안정적인 데이터 수집을 위해 반드시 필요한 설정입니다.\n\n• [확인] 클릭 후 뜨는 팝업에서\n• 반드시 **[허용]**을 선택해 주세요."
-
         AlertDialog.Builder(this)
-            .setTitle("⚠️ 배터리 최적화 제외 설정")
-            .setMessage(message)
-            .setPositiveButton("확인") { _, _ ->
+            .setTitle("연결 무중단 설정")
+            .setMessage("정교한 데이터 수집을 위해 시스템의 배터리 최적화 제외가 필요합니다.\n\n이어지는 시스템 안내 팝업에서 반드시 '허용'을 눌러주세요.")
+            .setPositiveButton("설정하기") { _, _ ->
                 isShowingDialog = false
                 try {
                     val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
@@ -74,73 +119,49 @@ class LoginActivity : AppCompatActivity() {
             .show()
     }
 
-    /**
-     * [2단계] 사용하지 않는 앱 관리 토글 안내
-     * 배터리 설정이 완료된 후, 로그인 버튼을 누를 때 가이드하거나
-     * 혹은 배터리 설정 직후에 이어서 띄워줄 수 있습니다.
-     */
     private fun showAppHibernationDialog() {
         isShowingDialog = true
-        val message = StringBuilder().apply {
-            append("장기간 미사용 시에도 연결을 유지하기 위한 설정입니다.\n\n")
-            append("1. [확인] 클릭 후 아래로 스크롤\n")
-            append("2. **'사용하지 않는 앱 관리'** 토글을 **해제(OFF)**해 주세요.")
-        }.toString()
-
         AlertDialog.Builder(this)
-            .setTitle("⚠️ 권한 유지 설정")
-            .setMessage(message)
-            .setPositiveButton("확인") { _, _ ->
+            .setTitle("장기 수집 안정화")
+            .setMessage("앱을 열지 않는 시간에도 권한이 취소되지 않도록 설정합니다.\n\n화면 하단의 '사용하지 않는 앱 관리' 항목을 비활성화(OFF)해 주세요.")
+            .setPositiveButton("이동하기") { _, _ ->
                 isShowingDialog = false
-                try {
-                    // 상택님이 올려주신 '애플리케이션 정보' 화면으로 바로 보냅니다.
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = "package:$packageName".toUri()
-                    }
-                    startActivity(intent)
-                } catch (_: Exception) {
-                    startActivity(Intent(Settings.ACTION_SETTINGS))
+
+                // [핵심] 설정창으로 보냈다는 기록을 남김 (다시 안 띄우기 위해)
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .edit { putBoolean("hibernation_shown", true) }
+
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", packageName, null)
                 }
+                startActivity(intent)
+
+                // [삭제됨] 여기서 겹침을 유발하던 ServerConnection.login 삭제!
             }
             .setCancelable(false)
             .show()
+    }
+
+    private fun setupLoginLogic(deviceID: String) {
+        binding.loginBtn.setOnClickListener {
+            val inputId = binding.id.text.toString().trim()
+            if (inputId.isNotEmpty()) {
+                ServerConnection.login(inputId, deviceID = deviceID, context = this)
+            } else {
+                Toast.makeText(this, "아이디를 입력해주세요.", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // [안전] 1, 2, 3단계가 모두 끝나서야 비로소 자동 로그인이 확인됨
+        val cache = CacheManager.loadCacheFile(this, "login.txt")
+        if (cache != null && !isShowingDialog) {
+            ServerConnection.login(cache, deviceID = deviceID, context = this)
+        }
     }
 
     private fun fetchDeviceID(): String {
         val connectedDevices = BTManager.connectedDevices(this)
         val connectedDevice = BTManager.getConnectedDevice(this, connectedDevices)
         return BTManager.getUUID(this, connectedDevice)
-    }
-
-    private fun cleanOldSensorData() {
-        val sensorRootPath = File(CsvController.getDownloadPath(), "sensor_data").absolutePath
-    }
-
-    private fun setupLoginLogic(deviceID: String) {
-        binding.loginBtn.setOnClickListener {
-            if (isBatteryConfigDone) {
-                // 배터리 설정은 됐는데, 아직 '사용하지 않는 앱 관리'를 안 껐을 수도 있으므로
-                // 여기서 한 번 더 가이드 팝업을 띄워주는 것이 연구 데이터 유실 방지에 좋습니다.
-                val inputId = binding.id.text.toString().trim()
-                if (inputId.isNotEmpty()) {
-                    // 로그인 진행 전, 앱 관리 안내 팝업을 띄우고 사용자가 확인하면 로그인하게 하거나
-                    // 아니면 쿨하게 바로 로그인을 시키되 팝업만 한 번 보여줍니다.
-                    ServerConnection.login(inputId, deviceID = deviceID, context = this)
-
-                    // 로그인이 성공적으로 요청되면 마지막으로 권한 유지 설정을 권장합니다.
-                    showAppHibernationDialog()
-                } else {
-                    Toast.makeText(this, "아이디를 입력해주세요.", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                Toast.makeText(this, "먼저 배터리 최적화 제외를 허용해주세요.", Toast.LENGTH_SHORT).show()
-                showBatteryOptimizationDialog()
-            }
-        }
-
-        val cache = CacheManager.loadCacheFile(this, "login.txt")
-        if (cache != null && isBatteryConfigDone) {
-            ServerConnection.login(cache, deviceID = deviceID, context = this)
-        }
     }
 }
