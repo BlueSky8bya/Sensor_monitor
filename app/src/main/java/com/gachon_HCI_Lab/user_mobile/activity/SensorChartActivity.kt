@@ -10,12 +10,13 @@ import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
-import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
 import com.gachon_HCI_Lab.user_mobile.databinding.ActivityChartBinding
 import com.gachon_HCI_Lab.user_mobile.sensor.model.AbstractSensor
 import com.gachon_HCI_Lab.user_mobile.sensor.model.OneAxisData
 import com.gachon_HCI_Lab.user_mobile.sensor.model.ThreeAxisData
 import com.github.mikephil.charting.interfaces.datasets.ILineDataSet
+import com.github.mikephil.charting.formatter.ValueFormatter
+import com.github.mikephil.charting.components.AxisBase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -45,12 +46,45 @@ class SensorChartActivity : AppCompatActivity() {
         timer = null
     }
 
-    class LineChartXAxisValueFormatter : IndexAxisValueFormatter() {
-        override fun getFormattedValue(value: Float): String {
+    // [핵심 수정] 스마트 라벨링 X축 포매터 (시가 바뀔 때만 전체 표시)
+    class SmartTimeAxisFormatter : ValueFormatter() {
+        private val fullFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+        private val shortFormat = SimpleDateFormat("mm:ss", Locale.getDefault())
+        private val hourFormat = SimpleDateFormat("HH", Locale.getDefault())
+
+        override fun getAxisLabel(value: Float, axis: AxisBase?): String {
+            // 현재 그릴 라벨의 Unix 시간 계산
             val unixTime = System.currentTimeMillis() / 1000L - value.toLong()
-            val timestamp = Date(unixTime * 1000L)
-            val dateTimeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-            return dateTimeFormat.format(timestamp)
+            val currentTimestamp = Date(unixTime * 1000L)
+
+            // 축의 엔트리 정보가 없으면 기본 풀 포맷 반환
+            if (axis == null || axis.mEntries.isEmpty()) {
+                return fullFormat.format(currentTimestamp)
+            }
+
+            // 현재 라벨이 축의 몇 번째 인덱스인지 확인
+            val entryIndex = axis.mEntries.indexOfFirst { it == value }
+
+            // [조건 1] 가장 첫 번째(왼쪽) 라벨은 무조건 풀 포맷(HH:mm:ss)
+            if (entryIndex <= 0) {
+                return fullFormat.format(currentTimestamp)
+            }
+
+            // [조건 2] 이전 라벨의 시간과 비교하여 "시(Hour)"가 달라졌는지 확인
+            val prevValue = axis.mEntries[entryIndex - 1]
+            val prevUnixTime = System.currentTimeMillis() / 1000L - prevValue.toLong()
+            val prevTimestamp = Date(prevUnixTime * 1000L)
+
+            val currentHour = hourFormat.format(currentTimestamp)
+            val prevHour = hourFormat.format(prevTimestamp)
+
+            // 시(Hour)가 달라졌다면(예: 18:59:50 -> 19:00:10) 풀 포맷 반환
+            if (currentHour != prevHour) {
+                return fullFormat.format(currentTimestamp)
+            }
+
+            // [조건 3] 위 조건에 안 걸리면 짧은 포맷(mm:ss) 반환
+            return shortFormat.format(currentTimestamp)
         }
     }
 
@@ -59,7 +93,6 @@ class SensorChartActivity : AppCompatActivity() {
         binding = ActivityChartBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // 1. 차트 초기화 (XML 순서에 맞춰 Gravity를 하단으로)
         ppgGreenChart = binding.chartPpgGreen
         heartRateChart = binding.chartHeart
         lightChart = binding.chartLight
@@ -74,32 +107,26 @@ class SensorChartActivity : AppCompatActivity() {
 
         charts.forEach { chart ->
             chart.xAxis.position = XAxis.XAxisPosition.BOTTOM
-            chart.xAxis.valueFormatter = LineChartXAxisValueFormatter()
+
+            // [수정] 위에서 만든 스마트 포매터 적용
+            chart.xAxis.valueFormatter = SmartTimeAxisFormatter()
+
             chart.description.isEnabled = false
 
             chart.setNoDataText("데이터 수신 대기 중...")
             chart.setNoDataTextColor(Color.GRAY)
 
-            // --- [디자인 수정 적용] ---
+            chart.xAxis.labelRotationAngle = 0f
+            chart.setExtraOffsets(0f, 0f, 0f, 0f)
+            chart.xAxis.yOffset = 5f
 
-            // 1. X축 레이블 각도 회전 (공백 명확히 유지)
-            chart.xAxis.labelRotationAngle = -45f
+            // 7등분 유지 (겹침 방지)
+            chart.xAxis.setLabelCount(7, true)
+            chart.xAxis.setAvoidFirstLastClipping(false)
 
-            // 2. 레이블 출력 갯수 제한
-            chart.xAxis.setLabelCount(6, false)
-
-            // 3. 레이블 잘림 방지 및 간격 조정
-            chart.xAxis.setAvoidFirstLastClipping(true)
-            chart.xAxis.yOffset = 10f
-
-            // 4. 차트 하단 여백 추가 (회전된 텍스트 공간 확보)
-            chart.setExtraOffsets(0f, 0f, 0f, 30f)
-
-            // 5. 텍스트 디자인 (sp 대신 Float 값 사용)
             chart.xAxis.textColor = Color.DKGRAY
-            chart.xAxis.textSize = 10f // 10sp 대신 10f로 수정
+            chart.xAxis.textSize = 9f
 
-            // 6. 데이터가 이미 있을 경우 (Gap 처리 유지)
             chart.data?.dataSets?.forEach { dataSet ->
                 if (dataSet is LineDataSet) {
                     dataSet.setDrawCircles(true)
@@ -152,7 +179,6 @@ class SensorChartActivity : AppCompatActivity() {
         }
 
         for (i in 0 until size) {
-            // [데이터 투명성] 데이터가 수집된 구간만 Entry 추가 (0f 강제 주입 제거)
             if (count[i] > 0) {
                 val yVal = (sensorTemp[i].second / count[i]).toFloat()
                 bufferQueue.add(Entry(sensorTemp[i].first.toFloat(), yVal))
@@ -162,9 +188,9 @@ class SensorChartActivity : AppCompatActivity() {
         if (bufferQueue.isNotEmpty()) {
             runOnUiThread {
                 when {
-                    sensorName.contains("Light", true) -> updateChart(lightChart, bufferQueue, "Light")
-                    sensorName.contains("Heart", true) -> updateChart(heartRateChart, bufferQueue, "HeartRate")
-                    sensorName.contains("Ppg", true) -> updateChart(ppgGreenChart, bufferQueue, "PPG Green")
+                    sensorName.contains("Light", true) -> updateChart(lightChart, bufferQueue, "Light [lx]")
+                    sensorName.contains("Heart", true) -> updateChart(heartRateChart, bufferQueue, "HeartRate [bpm]")
+                    sensorName.contains("Ppg", true) -> updateChart(ppgGreenChart, bufferQueue, "PPG Green [a.u.]")
                 }
             }
         }
@@ -201,7 +227,6 @@ class SensorChartActivity : AppCompatActivity() {
         }
 
         for (i in 0 until size) {
-            // [데이터 투명성] 데이터가 존재하는 구간만 차트에 추가
             if (count[i] > 0) {
                 for (j in 0..2) {
                     val yVal = (sensorTemps[j][i].second / count[i]).toFloat()
@@ -211,10 +236,19 @@ class SensorChartActivity : AppCompatActivity() {
         }
 
         if (bufferQueues[0].isNotEmpty()) {
+            // 센서 종류에 따라 단위를 결정
+            val unit = when {
+                sensorName.contains("Accelerometer", true) -> "[m/s²]"
+                sensorName.contains("Gyroscope", true) -> "[rad/s]"
+                sensorName.contains("Gravity", true) -> "[m/s²]"
+                else -> ""
+            }
+
+            // X, Y, Z 라벨 뒤에 단위
             val dataset = ArrayList<ILineDataSet>().apply {
-                add(makeLineDataSet(bufferQueues[0], "X").apply { color = Color.RED; setDrawCircles(true); circleRadius = 1.5f })
-                add(makeLineDataSet(bufferQueues[1], "Y").apply { color = Color.GREEN; setDrawCircles(true); circleRadius = 1.5f })
-                add(makeLineDataSet(bufferQueues[2], "Z").apply { color = Color.BLUE; setDrawCircles(true); circleRadius = 1.5f })
+                add(makeLineDataSet(bufferQueues[0], "X $unit").apply { color = Color.RED; setDrawCircles(true); circleRadius = 1.5f })
+                add(makeLineDataSet(bufferQueues[1], "Y $unit").apply { color = Color.GREEN; setDrawCircles(true); circleRadius = 1.5f })
+                add(makeLineDataSet(bufferQueues[2], "Z $unit").apply { color = Color.BLUE; setDrawCircles(true); circleRadius = 1.5f })
             }
 
             runOnUiThread {
@@ -247,11 +281,10 @@ class SensorChartActivity : AppCompatActivity() {
     }
 
     private fun makeLineDataSet(dataList : ArrayDeque<Entry>, name :String): LineDataSet {
-        // toList()를 사용하여 실시간 데이터 스냅샷을 생성
         return LineDataSet(dataList.toList(), name).apply {
             lineWidth = 1.5f
             setDrawValues(false)
-            setDrawCircles(true) // 데이터 포인트를 명확히 시각화
+            setDrawCircles(true)
         }
     }
 
