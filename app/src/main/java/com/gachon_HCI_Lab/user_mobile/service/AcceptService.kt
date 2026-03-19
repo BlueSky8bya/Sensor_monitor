@@ -224,7 +224,7 @@ class AcceptService : Service() {
                     if (mergedFile.renameTo(destFile)) {
                         CsvController.writeLog("SUCCESS: $mergedFileName 병합 및 이동 완료")
                     }
-                    delay(50) // 센서 간 간격
+                    delay(300) // 센서 간 간격
                 } catch (e: Exception) {
                     CsvController.writeLog("ERROR: 병합 실패 - ${e.message}")
                 }
