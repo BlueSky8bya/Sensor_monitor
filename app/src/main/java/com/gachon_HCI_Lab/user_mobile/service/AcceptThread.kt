@@ -1,29 +1,33 @@
 package com.gachon_HCI_Lab.user_mobile.service
 
-import android.R.attr.tag
 import android.content.Context
-import android.util.Log
 import com.gachon_HCI_Lab.user_mobile.common.*
 import com.gachon_HCI_Lab.user_mobile.sensor.controller.SensorController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import org.greenrobot.eventbus.EventBus
 import java.io.IOException
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.Executors
 
 class AcceptThread(context: Context) : Thread() {
+    @Volatile var lastReadTime: Long = System.currentTimeMillis()
     private lateinit var sensorController: SensorController
     private var reconstructedOneAxisData = StringBuilder()
     private var reconstructedTreeAxisData = StringBuilder()
+
+    // [추가] 코루틴 폭발을 막기 위한 단일 스레드 교통경찰 (DB 쓰기는 여기서만 순차적으로 실행)
+    private val dbDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    private val dbScope = CoroutineScope(dbDispatcher)
 
     init {
         try {
             sensorController = SensorController.getInstance(context)
         } catch (e: Exception) {
-            // 초기화 에러 로그 추가
             CsvController.writeLog("INIT_ERROR: ${e.message}")
             EventBus.getDefault().post(ThreadStateEvent(ThreadState.STOP))
             e.printStackTrace()
@@ -37,20 +41,29 @@ class AcceptThread(context: Context) : Thread() {
 
             while (true) {
                 try {
+                    CsvController.writeLog("SOCKET_WAIT: 워치의 연결을 기다리는 중...")
                     BluetoothConnect.createBluetoothSocket()
                     val inputStream = BluetoothConnect.createInputStream()
 
-                    // 연결 성공 로그
                     CsvController.writeLog("SOCKET_CONNECTED: 워치와 새로운 연결 수립")
                     EventBus.getDefault().post(ThreadStateEvent(ThreadState.RUN))
 
                     while (BluetoothConnect.isBluetoothRunning()) {
                         val buffer = createByteArray()
+
+                        // [추가] 읽기 직전에 생존 신고
+                        lastReadTime = System.currentTimeMillis()
+
                         val receivedData = getByteArrayFrom(inputStream, buffer)
 
-                        // 수신 데이터가 비어있으면 (블루투스 소켓이 끊긴 신호)
+                        // [추가] 1000번에 1번꼴로 생존 로그 남기기 (너무 많으면 파일 터짐 방지)
+                        if (Math.random() < 0.001) {
+                            CsvController.writeLog("HEARTBEAT: 수신 스레드 멈추지 않고 계속 데이터 읽는 중...")
+                        }
+
                         if (receivedData.isEmpty()) {
-                            CsvController.writeLog("SOCKET_RECEIVE_EMPTY: 데이터 수신 결과가 0입니다. 내부 루프 종료.")
+                            // [추적 1] Empty 반환으로 루프 탈출
+                            CsvController.writeLog("SOCKET_BREAK: receivedData가 비어있음. (소켓 끊김 감지)")
                             break
                         }
 
@@ -63,47 +76,45 @@ class AcceptThread(context: Context) : Thread() {
                         saveThreeDataToCsv()
                     }
 
-                    // 내부 루프를 빠져나왔을 때 (break)
-                    CsvController.writeLog("SOCKET_LOOP_BREAK: BluetoothRunning 상태가 아니거나 수신 데이터가 없어 루프를 탈출함")
+                    // [추적 2] 내부 루프 탈출 사유 기록
+                    if (!BluetoothConnect.isBluetoothRunning()) {
+                        CsvController.writeLog("SOCKET_BREAK: isBluetoothRunning이 false로 변경되어 루프 탈출")
+                    }
 
                 } catch (e: Exception) {
-                    // 개별 연결 시도의 에러 로그
-                    CsvController.writeLog("SOCKET_IO_EXCEPTION: 연결 유지 중 에러 발생 - ${e.message}")
-                    // 여기서 break를 하지 않고 다시 위로 올라가서 재연결을 시도하게 할 수도 있습니다.
-                    // 만약 무한 재연결을 원치 않으시면 아래 break를 유지하세요.
-                    break
+                    // [추적 3] accept() 대기 중이거나 다른 예외 발생
+                    CsvController.writeLog("SOCKET_OUTER_EXCEPTION: ${e.javaClass.simpleName} - ${e.message}")
+                    EventBus.getDefault().post(SocketStateEvent(SocketState.CLOSE))
+                    break // 여기서 무한루프를 깨볼게요 (에러 나면 차라리 죽고 다시 시작하게)
                 }
             }
         } catch (e: Exception) {
-            // 최상위 루프 자체가 터졌을 때 (심각한 메모리 오류 등)
             CsvController.writeLog("CRITICAL_THREAD_ERROR: 최상위 루프 사망 - ${e.message}")
         } finally {
-            // [핵심] 어떤 이유로든 스레드가 끝날 때 무조건 실행됨
             CsvController.writeLog("THREAD_TERMINATED: AcceptThread가 완전히 종료되었습니다.")
             EventBus.getDefault().post(ThreadStateEvent(ThreadState.STOP))
         }
     }
 
-    // 데이터 수신 중 발생하는 에러 포착
     private fun getByteArrayFrom(inputStream: InputStream, buffer: ByteArray): ByteArray {
         return try {
             when (val readBytes = inputStream.read(buffer)) {
-                -1 -> { // 소켓이 완전히 닫혔을 때
-                    CsvController.writeLog("SOCKET_STREAM_END: 워치에서 연결을 닫았습니다.")
+                -1 -> {
+                    CsvController.writeLog("SOCKET_STREAM_END: 워치에서 연결을 끊었음 (EOF)")
                     handleSocketError()
                     BluetoothConnect.stopRunning()
                     ByteArray(0)
                 }
-                0 -> { // 데이터가 잠시 안 들어올 때 (중요!)
-                    Log.d(tag.toString(), "Zero bytes read, skipping...")
-                    ByteArray(1) // 빈 배열이 아닌 1바이트라도 반환해서 루프를 유지시킴
+                0 -> {
+                    ByteArray(1)
                 }
                 else -> {
                     buffer.copyOf(readBytes)
                 }
             }
         } catch (e: IOException) {
-            CsvController.writeLog("SOCKET_IO_EXCEPTION: ${e.message}")
+            // [추적 4] read() 도중 파이프가 끊어짐
+            CsvController.writeLog("SOCKET_IO_EXCEPTION (read 중): ${e.message}")
             handleSocketError()
             BluetoothConnect.stopRunning()
             ByteArray(0)
@@ -111,8 +122,7 @@ class AcceptThread(context: Context) : Thread() {
     }
 
     private fun handleSocketError() {
-        // [수정] 소켓 에러 발생 시 상태 로그 추가
-        CsvController.writeLog("HANDLE_SOCKET_ERROR: 소켓 에러 처리 시작")
+        CsvController.writeLog("HANDLE_SOCKET_ERROR: 에러 처리 진행 (상태 CLOSE 변경)")
         EventBus.getDefault().post(SocketStateEvent(SocketState.CLOSE))
         EventBus.getDefault().post(ThreadStateEvent(ThreadState.STOP))
         clear()
@@ -141,7 +151,8 @@ class AcceptThread(context: Context) : Thread() {
             addOneAxisData(byteBuffer, dataType, timestamp)
             addThreeAxisData(byteBuffer, dataType, timestamp)
         } catch (e: Exception) {
-            CsvController.writeLog("PARSING_ERROR: ${e.message}")
+            // 여기서 파싱 에러가 나면 조용히 삼키지 말고 남기기
+            CsvController.writeLog("PARSING_ERROR: 버퍼 파싱 중 오류 - ${e.message}")
         }
     }
 
@@ -154,7 +165,7 @@ class AcceptThread(context: Context) : Thread() {
     private fun saveStepCountDataFrom(byteBuffer: ByteBuffer) {
         if (byteBuffer.remaining() < 4) return
         val stepCount = byteBuffer.int
-        CoroutineScope(Dispatchers.IO).launch {
+        dbScope.launch { // [수정됨] 무한 생성 대신 단일 스레드 대기열로 보냄
             sensorController.dataAccept(stepCount)
         }
     }
@@ -162,7 +173,7 @@ class AcceptThread(context: Context) : Thread() {
     private fun saveOneAxisDataToCsv() {
         val oneAxisData = reconstructedOneAxisData.toString()
         if (oneAxisData.isNotEmpty()) {
-            CoroutineScope(Dispatchers.IO).launch {
+            dbScope.launch { // [수정됨]
                 sensorController.dataAccept(oneAxisData)
             }
         }
@@ -171,7 +182,7 @@ class AcceptThread(context: Context) : Thread() {
     private fun saveThreeDataToCsv() {
         val threeAxisData = reconstructedTreeAxisData.toString()
         if (threeAxisData.isNotEmpty()) {
-            CoroutineScope(Dispatchers.IO).launch {
+            dbScope.launch { // [수정됨]
                 sensorController.dataAccept(threeAxisData)
             }
         }

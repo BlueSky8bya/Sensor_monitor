@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.util.Log
+import com.gachon_HCI_Lab.user_mobile.common.CsvController
 import com.gachon_HCI_Lab.user_mobile.common.SocketState
 import com.gachon_HCI_Lab.user_mobile.common.SocketStateEvent
 import com.gachon_HCI_Lab.user_mobile.common.ThreadState
@@ -58,6 +59,13 @@ object BluetoothConnect {
     }
 
     fun stopRunning(){
+        // [추적 1] 누군가 통신 중지 명령을 내림
+        CsvController.writeLog("BLUETOOTH_CONNECT: 누군가 stopRunning()을 호출했습니다!")
+
+        // [추적 2] 범인(호출자)의 위치를 역추적해서 로그에 남김
+        val callerTrace = Exception().stackTrace.take(3).joinToString(" <- ") { it.methodName }
+        CsvController.writeLog("STOP_CALLER: $callerTrace")
+
         isRunning = false;
     }
 

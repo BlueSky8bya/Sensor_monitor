@@ -128,15 +128,18 @@ class SensorActivity : AppCompatActivity() {
 
     private fun stopLocationService() {
         if (isLocationServiceRunning()) {
-            val intent = Intent(this, AcceptService::class.java).apply {
-                action = ACTION_STOP_LOCATION_SERVICE
-            }
-            startService(intent)
+            // [수정 1] startService 대신 확실한 stopService() 호출
+            val stopIntent = Intent(this, AcceptService::class.java)
+            stopService(stopIntent)
 
             val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.cancel(1)
-            Toast.makeText(this, "Service stopped", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "수집 종료: 앱을 완전히 닫습니다.", Toast.LENGTH_SHORT).show()
         }
+
+        // [수정 2] 앱을 백그라운드 프로세스까지 완전히 날려버리는 강력한 종료 로직
+        finishAffinity() // 현재 쌓여있는 모든 화면(Activity)을 메모리에서 지움
+        kotlin.system.exitProcess(0) // 안드로이드 시스템에서 이 앱의 프로세스 자체를 강제 킬(Kill)
     }
 
     private fun isLocationServiceRunning(): Boolean {
@@ -153,9 +156,11 @@ class SensorActivity : AppCompatActivity() {
     // SocketStateEvent로 받도록 파라미터 변경 ──
     @Subscribe(threadMode = ThreadMode.MAIN)
     fun onSocketStateChanged(event: SocketStateEvent) {
-
         // 봉투 안에서 실제 상태(CONNECT, NONE)를 꺼냅니다
         val currentState = event.state
+
+        // [추적 3] 화면 상태가 언제, 무엇으로 바뀌는지 기록
+        CsvController.writeLog("UI_STATE_CHANGE: 화면 상태 변경 요청 들어옴 -> $currentState")
 
         // 1. 글씨 변경
         binding.stateLabel.text = currentState.toString()

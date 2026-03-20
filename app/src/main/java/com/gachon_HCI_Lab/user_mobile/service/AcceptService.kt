@@ -14,6 +14,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
@@ -54,6 +55,8 @@ class AcceptService : Service() {
         // MERGE_COUNT는 이제 시간 기준이므로 사용하지 않지만 구조 유지를 위해 둠
         private const val MERGE_COUNT = 1
     }
+    // [추가] 폰이 잠들지 않게 막아주는 WakeLock 변수
+    private var wakeLock: PowerManager.WakeLock? = null
     private val tag = "AcceptService"
     private var isConnected: Boolean = false
 
@@ -66,7 +69,24 @@ class AcceptService : Service() {
 
     override fun onBind(p0: Intent?): IBinder? = null
 
+    // 1. 메모리 부족(Low Memory) 감지 메커니즘 추가 (클래스 내부 아무 곳이나)
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        CsvController.writeLog("SYSTEM_WARNING: OS에서 메모리 정리(TrimMemory) 요청 들어옴. Level: $level")
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        CsvController.writeLog("SYSTEM_CRITICAL: 폰의 시스템 메모리가 매우 부족합니다! 앱이 강제 종료될 위험이 있습니다.")
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // [추가] CPU 잠들기 방지 (WakeLock 획득)
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "UserMobile::SensorWakeLock")
+        // 🚨 장시간 수집이 목적이면 시간을 빼고 wakeLock?.acquire() 만 적으세요.
+        wakeLock?.acquire()
+
         bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
 
@@ -83,6 +103,9 @@ class AcceptService : Service() {
             }
         }
 
+        // [추적 6] 서비스가 시작(또는 재시작)될 때 로그
+        CsvController.writeLog("SERVICE_START: onStartCommand 호출됨. (flags: $flags, startId: $startId)")
+
         setForeground()
         startForeground()
 
@@ -95,6 +118,14 @@ class AcceptService : Service() {
     }
 
     override fun onDestroy() {
+        // [추적 4] 서비스가 정상/비정상적으로 죽을 때 무조건 찍힘
+        CsvController.writeLog("SERVICE_DEAD: AcceptService가 onDestroy() 되었습니다. (시스템이 죽였거나 앱이 종료됨)")
+
+        // [추가] 서비스가 죽을 땐 WakeLock 놓아주기
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+        }
+
         super.onDestroy()
         unregisterReceiver(bluetoothStateReceiver)
         if (::acceptThread.isInitialized) acceptThread.clear()
@@ -104,6 +135,12 @@ class AcceptService : Service() {
         EventBus.getDefault().post(SocketStateEvent(SocketState.CLOSE))
         if (EventBus.getDefault().isRegistered(this)) EventBus.getDefault().unregister(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // [추적 5] 백그라운드 태스크에서 앱이 날아갔을 때
+        CsvController.writeLog("SERVICE_REMOVED: 앱이 최근 실행 목록에서 날아갔습니다! (onTaskRemoved)")
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun startForeground() {
@@ -269,19 +306,42 @@ class AcceptService : Service() {
         }, checkPeriod, checkPeriod)
     }
 
+    private var watchdogTimer: Timer? = null
+
+    private fun startWatchdogTimer() {
+        watchdogTimer?.cancel()
+        watchdogTimer = Timer()
+        watchdogTimer?.schedule(object : TimerTask() {
+            override fun run() {
+                if (isConnected && ::acceptThread.isInitialized) {
+                    val idleTime = System.currentTimeMillis() - acceptThread.lastReadTime
+
+                    // 15초 이상 아무 데이터도 받지 못했다면?!
+                    if (idleTime > 15000) {
+                        CsvController.writeLog("WATCHDOG_ALERT: 🚨 비상! 15초 이상 워치로부터 데이터가 오지 않습니다. (현재 스레드가 inputStream.read()에 갇혀 완전히 멈춘 상태입니다!)")
+                    }
+                }
+            }
+        }, 10000, 10000) // 10초마다 순찰
+    }
+
     @Subscribe(threadMode = ThreadMode.BACKGROUND)
     fun listenSocketState(event: ThreadStateEvent) {
         isConnected = when (event.state) {
             ThreadState.RUN -> {
-                CsvController.writeLog("CONNECTED: 연결 성공")
+                CsvController.writeLog("CONNECTED: 연결 성공 (수신 스레드 RUN)")
                 csvWrite(INTERVAL_MS)
-                startMergeTimer() // 타이머 시작
+                startMergeTimer()
+                startWatchdogTimer() // [추가] 감시견 풀기!
                 EventBus.getDefault().post(SocketStateEvent(SocketState.CONNECT))
                 true
             }
             else -> {
+                CsvController.writeLog("DISCONNECTED: 수신 스레드 상태가 ${event.state}로 변경되어 타이머 취소")
                 timer?.cancel()
                 timer = null
+                watchdogTimer?.cancel() // [추가] 감시견 회수
+                watchdogTimer = null
                 false
             }
         }
