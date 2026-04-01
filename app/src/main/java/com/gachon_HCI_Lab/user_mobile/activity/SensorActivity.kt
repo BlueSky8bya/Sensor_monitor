@@ -22,9 +22,8 @@ import com.gachon_HCI_Lab.user_mobile.databinding.ActivitySensorBinding
 import com.gun0912.tedpermission.PermissionListener
 import com.gun0912.tedpermission.normal.TedPermission
 import org.greenrobot.eventbus.EventBus
-import org.greenrobot.eventbus.Subscribe // 추가
-import org.greenrobot.eventbus.ThreadMode // 추가
-import java.io.File
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
 
 class SensorActivity : AppCompatActivity() {
     private lateinit var sensorController: SensorController
@@ -154,7 +153,7 @@ class SensorActivity : AppCompatActivity() {
     }
 
     // SocketStateEvent로 받도록 파라미터 변경 ──
-    @Subscribe(threadMode = ThreadMode.MAIN)
+    @Subscribe(sticky = true, threadMode = ThreadMode.MAIN)
     fun onSocketStateChanged(event: SocketStateEvent) {
         // 봉투 안에서 실제 상태(CONNECT, NONE)를 꺼냅니다
         val currentState = event.state

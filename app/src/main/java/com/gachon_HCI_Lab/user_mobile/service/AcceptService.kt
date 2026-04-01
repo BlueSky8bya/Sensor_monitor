@@ -28,15 +28,12 @@ import com.gachon_HCI_Lab.user_mobile.common.SocketStateEvent
 import com.gachon_HCI_Lab.user_mobile.common.ThreadState
 import com.gachon_HCI_Lab.user_mobile.common.ThreadStateEvent
 import com.gachon_HCI_Lab.user_mobile.sensor.controller.SensorController
-import com.gachon_HCI_Lab.user_mobile.sensor.model.SensorEnum
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
 import org.greenrobot.eventbus.ThreadMode
-import java.io.File
 import java.util.Timer
 import java.util.TimerTask
 
@@ -46,16 +43,8 @@ import java.util.TimerTask
  */
 class AcceptService : Service() {
     companion object {
-        /**
-         * [설정 변수] 상수는 companion object 안에 const val로 선언하는 것이 정석입니다.
-         */
-        //private val INTERVAL_MS = 1000L * 10 // 10초 주기 (테스트용)
         private const val INTERVAL_MS = 1000L * 60 * 5 // 5분 주기
-
-        // MERGE_COUNT는 이제 시간 기준이므로 사용하지 않지만 구조 유지를 위해 둠
-        private const val MERGE_COUNT = 1
     }
-    // [추가] 폰이 잠들지 않게 막아주는 WakeLock 변수
     private var wakeLock: PowerManager.WakeLock? = null
     private val tag = "AcceptService"
     private var isConnected: Boolean = false
@@ -64,27 +53,27 @@ class AcceptService : Service() {
     private lateinit var bluetoothAdapter: BluetoothAdapter
     private lateinit var acceptThread: AcceptThread
     private val sensorController: SensorController = SensorController.getInstance(this@AcceptService)
+
     private var timer: Timer? = null
+    private var mergeTimer: Timer? = null
+    private var watchdogTimer: Timer? = null
     private lateinit var bluetoothStateReceiver: BluetoothStateReceiver
 
     override fun onBind(p0: Intent?): IBinder? = null
 
-    // 1. 메모리 부족(Low Memory) 감지 메커니즘 추가 (클래스 내부 아무 곳이나)
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        CsvController.writeLog("SYSTEM_WARNING: OS에서 메모리 정리(TrimMemory) 요청 들어옴. Level: $level")
+        CsvController.writeLog("[SYS] onTrimMemory (Level: $level)")
     }
 
     override fun onLowMemory() {
         super.onLowMemory()
-        CsvController.writeLog("SYSTEM_CRITICAL: 폰의 시스템 메모리가 매우 부족합니다! 앱이 강제 종료될 위험이 있습니다.")
+        CsvController.writeLog("[SYS] onLowMemory (OOM Risk)")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // [추가] CPU 잠들기 방지 (WakeLock 획득)
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "UserMobile::SensorWakeLock")
-        // 🚨 장시간 수집이 목적이면 시간을 빼고 wakeLock?.acquire() 만 적으세요.
         wakeLock?.acquire()
 
         bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
@@ -103,8 +92,7 @@ class AcceptService : Service() {
             }
         }
 
-        // [추적 6] 서비스가 시작(또는 재시작)될 때 로그
-        CsvController.writeLog("SERVICE_START: onStartCommand 호출됨. (flags: $flags, startId: $startId)")
+        CsvController.writeLog("[SVC] onStartCommand (flags: $flags, startId: $startId)")
 
         setForeground()
         startForeground()
@@ -118,10 +106,8 @@ class AcceptService : Service() {
     }
 
     override fun onDestroy() {
-        // [추적 4] 서비스가 정상/비정상적으로 죽을 때 무조건 찍힘
-        CsvController.writeLog("SERVICE_DEAD: AcceptService가 onDestroy() 되었습니다. (시스템이 죽였거나 앱이 종료됨)")
+        CsvController.writeLog("[SVC] onDestroy")
 
-        // [추가] 서비스가 죽을 땐 WakeLock 놓아주기
         wakeLock?.let {
             if (it.isHeld) it.release()
         }
@@ -129,8 +115,13 @@ class AcceptService : Service() {
         super.onDestroy()
         unregisterReceiver(bluetoothStateReceiver)
         if (::acceptThread.isInitialized) acceptThread.clear()
+
         timer?.cancel()
         timer = null
+        mergeTimer?.cancel()
+        mergeTimer = null
+        watchdogTimer?.cancel()
+        watchdogTimer = null
 
         EventBus.getDefault().post(SocketStateEvent(SocketState.CLOSE))
         if (EventBus.getDefault().isRegistered(this)) EventBus.getDefault().unregister(this)
@@ -138,8 +129,7 @@ class AcceptService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // [추적 5] 백그라운드 태스크에서 앱이 날아갔을 때
-        CsvController.writeLog("SERVICE_REMOVED: 앱이 최근 실행 목록에서 날아갔습니다! (onTaskRemoved)")
+        CsvController.writeLog("[SVC] onTaskRemoved")
         super.onTaskRemoved(rootIntent)
     }
 
@@ -186,38 +176,33 @@ class AcceptService : Service() {
         return true
     }
 
-    /**
-     * 5분마다 DB 데이터를 추출하여 CSV 파편 파일을 생성
-     */
     private fun csvWrite(time: Long) {
         timer?.cancel()
         timer = Timer()
+        CsvController.writeLog("[TIMER] csvWrite (5분 주기) 시작")
+
         timer?.schedule(object : TimerTask() {
             override fun run() {
                 CoroutineScope(Dispatchers.IO).launch {
                     if (isConnected) {
-                        Log.d(tag, "5분 주기 데이터 추출 및 CSV 쓰기 시작")
+                        CsvController.writeLog("[TIMER] csvWrite 실행: DB -> CSV 분할 저장")
                         sensorController.writeCsv("OneAxis")
                         sensorController.writeCsv("ThreeAxis")
+                    } else {
+                        CsvController.writeLog("[TIMER] csvWrite 스킵 (Not Connected)")
                     }
                 }
             }
         }, time, time)
     }
 
-    /**
-     * 파일 병합 및 서버 전송 (Suspend 함수)
-     */
     @SuppressLint("DefaultLocale")
     private suspend fun sendCSV() {
         val downloadBasePath = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
-        CsvController.writeLog("DEBUG: sendCSV 병합 프로세스 시작")
+        CsvController.writeLog("[MERGE] sendCSV() 진입: 30분 단위 병합 및 전송")
 
-        // 1. 현재 시스템 시간 기준으로 파일명에 들어갈 '고정된' 시간 계산
         val calendar = java.util.Calendar.getInstance()
         val minute = calendar.get(java.util.Calendar.MINUTE)
-
-        // 30분 단위로 '내림' 처리하여 파일명 고정 (예: 31분 -> 30분, 05분 -> 00분)
         val fixedMinute = if (minute >= 30) "30" else "00"
         val dateFormat = java.text.SimpleDateFormat("yyMMdd", java.util.Locale.getDefault())
         val hourFormat = java.text.SimpleDateFormat("HH", java.util.Locale.getDefault())
@@ -226,13 +211,12 @@ class AcceptService : Service() {
         val hourStr = hourFormat.format(calendar.time)
         val timeStamp = "${hourStr}${fixedMinute}" // 예: 1600, 1830
 
-        for (sensor in SensorEnum.values()) {
+        for (sensor in com.gachon_HCI_Lab.user_mobile.sensor.model.SensorEnum.values()) {
             val sensorType = sensor.value.split("_").getOrNull(0) ?: continue
-            val sensorDir = File("$downloadBasePath/sensor_data/$sensorType")
-            val sendedDir = File(sensorDir, "sended")
+            val sensorDir = java.io.File("$downloadBasePath/sensor_data/$sensorType")
+            val sendedDir = java.io.File(sensorDir, "sended")
             if (!sendedDir.exists()) sendedDir.mkdirs()
 
-            // 2. 파편 파일 필터링 (기존 로직 유지)
             val allFiles = sensorDir.listFiles()?.filter { file ->
                 file.name.endsWith(".csv") &&
                         file.name.contains(sensor.value) &&
@@ -242,71 +226,80 @@ class AcceptService : Service() {
 
             if (allFiles.isNotEmpty()) {
                 val sortedFiles = allFiles.sortedBy { it.name }
-
-                // [수정 포인트] 요청하신 파일명 형식 적용: sensor.value_YYMMDD_HHmm.csv
                 val mergedFileName = "${sensor.value}_${dateStr}_${timeStamp}.csv"
-                val mergedFile = File(sensorDir, mergedFileName)
+                val mergedFile = java.io.File(sensorDir, mergedFileName)
+
+                CsvController.writeLog("[MERGE] ${sensor.value}: 조각 파일 ${sortedFiles.size}개 병합 -> $mergedFileName")
 
                 try {
-                    // 3. 병합 실행 (스트림 처리)
                     mergedFile.bufferedWriter().use { writer ->
                         for (file in sortedFiles) {
                             file.bufferedReader().use { reader ->
                                 reader.lineSequence().forEachIndexed { index, line ->
-                                    // 첫 번째 파일이 아니면 헤더(첫 줄) 생략
                                     if (index == 0 && file != sortedFiles.first()) return@forEachIndexed
                                     writer.write(line)
                                     writer.newLine()
                                 }
                             }
-                            delay(10)
+                            kotlinx.coroutines.delay(10)
                         }
                     }
 
-                    // 4. 이동 시도 (sended 폴더로)
-                    val destFile = File(sendedDir, mergedFileName)
+                    val destFile = java.io.File(sendedDir, mergedFileName)
 
                     if (mergedFile.renameTo(destFile)) {
-                        CsvController.writeLog("SUCCESS: $mergedFileName 생성 및 이동 완료.")
-                        sortedFiles.forEach { it.delete() }
+                        CsvController.writeLog("[MERGE] ${sensor.value}: 병합 완료 및 sended 이동")
+
+                        val epochTime = System.currentTimeMillis() / 1000L
+                        val userID = com.gachon_HCI_Lab.user_mobile.common.DeviceInfo._uID
+                        val battery = com.gachon_HCI_Lab.user_mobile.common.DeviceInfo._battery
+
+                        CsvController.writeLog("[UPLOAD] 전송 시도: $mergedFileName (UID: $userID, BAT: $battery)")
+
+                        com.gachon_HCI_Lab.user_mobile.common.ServerConnection.postFile(destFile, userID, battery, epochTime.toString()) { isSuccess ->
+                            if (isSuccess) {
+                                CsvController.writeLog("[UPLOAD] 전송 성공: $mergedFileName (조각 파일 ${sortedFiles.size}개 삭제)")
+                                sortedFiles.forEach { it.delete() }
+                            } else {
+                                CsvController.writeLog("[UPLOAD] 전송 실패: $mergedFileName (조각 파일 보존)")
+                            }
+                        }
                     } else {
-                        CsvController.writeLog("ERROR: $mergedFileName 이동 실패. 병합본 삭제.")
+                        CsvController.writeLog("[MERGE] 이동 실패: $mergedFileName (병합본 삭제)")
                         if (mergedFile.exists()) mergedFile.delete()
                     }
 
-                    delay(300)
+                    kotlinx.coroutines.delay(300)
                 } catch (e: Exception) {
-                    CsvController.writeLog("ERROR: 병합 중 예외 발생 (${sensor.value}) - ${e.message}")
+                    CsvController.writeLog("[MERGE] Exception (${sensor.value}): ${e.message}")
                     if (mergedFile.exists()) mergedFile.delete()
                 }
+            } else {
+                Log.d(tag, "[MERGE] ${sensor.value}: 병합할 조각 파일 없음")
             }
         }
     }
 
-    /**
-     * 매 분마다 시스템 시계를 확인하여 00분 또는 30분에 병합 실행
-     */
     private fun startMergeTimer() {
-        val mergeTimer = Timer()
+        mergeTimer?.cancel()
+        mergeTimer = Timer()
         val checkPeriod = 1000L * 60 // 1분마다 체크
+        CsvController.writeLog("[TIMER] MergeTimer (1분 주기 감시) 시작")
 
-        mergeTimer.schedule(object : TimerTask() {
+        mergeTimer?.schedule(object : TimerTask() {
             override fun run() {
                 val calendar = java.util.Calendar.getInstance()
                 val minute = calendar.get(java.util.Calendar.MINUTE)
 
-                // [핵심 수정] 실제 환경에 맞게 정각(00) 또는 30분일 때만 병합
                 if (isConnected && (minute == 0 || minute == 30)) {
+                    CsvController.writeLog("[TIMER] MergeTimer 트리거 (${minute}분): sendCSV() 호출")
                     CoroutineScope(Dispatchers.Default).launch {
-                        CsvController.writeLog("SYSTEM_EVENT: 정기 병합 시간 도달 (${minute}분)")
                         sendCSV()
                     }
                 }
             }
         }, checkPeriod, checkPeriod)
     }
-
-    private var watchdogTimer: Timer? = null
 
     private fun startWatchdogTimer() {
         watchdogTimer?.cancel()
@@ -315,33 +308,35 @@ class AcceptService : Service() {
             override fun run() {
                 if (isConnected && ::acceptThread.isInitialized) {
                     val idleTime = System.currentTimeMillis() - acceptThread.lastReadTime
-
-                    // 15초 이상 아무 데이터도 받지 못했다면?!
                     if (idleTime > 15000) {
-                        CsvController.writeLog("WATCHDOG_ALERT: 🚨 비상! 15초 이상 워치로부터 데이터가 오지 않습니다. (현재 스레드가 inputStream.read()에 갇혀 완전히 멈춘 상태입니다!)")
+                        CsvController.writeLog("[WATCHDOG] 데이터 수신 지연 감지 (>15초)")
                     }
                 }
             }
-        }, 10000, 10000) // 10초마다 순찰
+        }, 10000, 10000)
     }
 
     @Subscribe(threadMode = ThreadMode.BACKGROUND)
     fun listenSocketState(event: ThreadStateEvent) {
         isConnected = when (event.state) {
             ThreadState.RUN -> {
-                CsvController.writeLog("CONNECTED: 연결 성공 (수신 스레드 RUN)")
+                CsvController.writeLog("[BT_STATE] CONNECTED (타이머 시작)")
                 csvWrite(INTERVAL_MS)
                 startMergeTimer()
-                startWatchdogTimer() // [추가] 감시견 풀기!
-                EventBus.getDefault().post(SocketStateEvent(SocketState.CONNECT))
+                startWatchdogTimer()
+                EventBus.getDefault().postSticky(SocketStateEvent(SocketState.CONNECT))
                 true
             }
             else -> {
-                CsvController.writeLog("DISCONNECTED: 수신 스레드 상태가 ${event.state}로 변경되어 타이머 취소")
+                CsvController.writeLog("[BT_STATE] DISCONNECTED (상태: ${event.state}, 모든 타이머 취소)")
                 timer?.cancel()
                 timer = null
-                watchdogTimer?.cancel() // [추가] 감시견 회수
+                watchdogTimer?.cancel()
                 watchdogTimer = null
+                mergeTimer?.cancel()
+                mergeTimer = null
+
+                EventBus.getDefault().postSticky(SocketStateEvent(SocketState.CLOSE))
                 false
             }
         }
