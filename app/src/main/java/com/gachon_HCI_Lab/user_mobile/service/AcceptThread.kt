@@ -159,7 +159,13 @@ class AcceptThread(context: Context) : Thread() {
     private fun saveBatteryDataFrom(byteBuffer: ByteBuffer) {
         if (byteBuffer.remaining() < 4) return
         val battery = byteBuffer.int
+        // [2026-06-30] 이유: 워치 scale=-1 등으로 음수/100초과 garbage가 올 수 있음. | 목적: 비정상값은 서버·로그 오염 방지 위해 무시. (DCT ae7ae27 이식)
+        if (battery < 0 || battery > 100) {
+            CsvController.writeLog("BATTERY_INVALID: 비정상 배터리값 수신 무시 ($battery)")
+            return
+        }
         DeviceInfo.setBattery(battery.toString())
+        CsvController.logBattery(battery) // [2026-06-30] 로컬 배터리 타임라인 CSV 기록 (DCT ae7ae27 이식)
     }
 
     private fun saveStepCountDataFrom(byteBuffer: ByteBuffer) {
