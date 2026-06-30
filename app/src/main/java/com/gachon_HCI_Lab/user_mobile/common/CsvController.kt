@@ -1,6 +1,5 @@
 package com.gachon_HCI_Lab.user_mobile.common
 
-import android.content.Context
 import android.os.Environment
 import android.util.Log
 import com.gachon_HCI_Lab.user_mobile.sensor.model.AbstractSensor
@@ -16,13 +15,9 @@ import java.util.TimeZone
 object CsvController {
     private const val TAG = "CsvController"
 
-    // 앱 컨텍스트. 로그를 앱 전용 외부저장(getExternalFilesDir)에 쓰기 위해 필요.
-    // ApplicationCrashService.onCreate()에서 init()으로 주입한다.
-    private var appContext: Context? = null
-
-    fun init(context: Context) {
-        appContext = context.applicationContext
-    }
+    // 직전 쓰기 실패로 디스크에 못 남긴 로그 줄을 임시 보관(메모리). 스토리지 복구 시 다음 호출에서 함께 flush.
+    private val pendingLogs = ArrayDeque<String>()
+    private const val MAX_PENDING = 500
 
     // 로그/파일명 시각은 기기 시간대와 무관하게 항상 한국시간(KST)으로 기록.
     // 주의: 서버 전송 timestamp는 epoch(System.currentTimeMillis)라 시간대 영향 없음 — 별개.
@@ -33,38 +28,55 @@ object CsvController {
         SimpleDateFormat(pattern, Locale.getDefault()).apply { timeZone = KST }
 
     /**
-     * 앱의 주요 이벤트나 에러를 파일로 남기는 함수
+     * 앱의 주요 이벤트나 에러를 파일로 남기는 함수.
+     *
+     * 파일관리자로 폴더를 수동 삭제하면 scoped storage 색인이 desync되어
+     * 기존 파일명 append가 EEXIST(open failed)로 실패할 수 있다. 이를 견고하게 처리:
+     *  1) 정상 경로(Download/sensor_data/logs)에 append 시도
+     *  2) EEXIST류 실패 시 손상 핸들을 delete 후 재생성하여 1회 재시도
+     *  3) 그래도 실패하면 해당 줄을 메모리 버퍼에 보관 → 스토리지 복구 후 다음 호출에서 함께 기록
+     * 덕분에 위치는 그대로 두면서, 삭제 직후 연결 시점 로그도 유실되지 않는다.
      */
+    @Synchronized
     fun writeLog(message: String) {
-        try {
-            // 로그는 앱 전용 외부저장(/Android/data/<pkg>/files/logs)에 저장.
-            // MediaStore 색인을 타지 않아 수동 폴더 삭제로 인한 색인 desync/EEXIST가 없다.
-            // appContext 미주입(초기화 전) 시에만 기존 Download 경로로 폴백.
-            val base = appContext?.getExternalFilesDir(null) ?: getDownloadPath()
-            val logDir = File(base, "logs")
+        val timestamp = kstFormat("yyyy-MM-dd HH:mm:ss").format(Date())
+        pendingLogs.addLast("[$timestamp] $message")
 
-            if (!logDir.exists()) {
-                val created = logDir.mkdirs()
-                if (!created) {
-                    Log.e(TAG, "Log directory creation failed")
-                    return
-                }
+        try {
+            val logDir = File(getDownloadPath(), "sensor_data/logs")
+            if (!logDir.exists() && !logDir.mkdirs()) {
+                Log.e(TAG, "Log directory creation failed")
+                return // 줄은 pendingLogs에 남아 다음 호출에서 재시도
             }
 
-            val sdf = kstFormat("yyyy-MM-dd HH:mm:ss")
-            val timestamp = sdf.format(Date())
+            // 로그 파일명 날짜 포맷 yyMMdd (예: app_debug_log_260319.txt)
+            val logFile = File(logDir, "app_debug_log_${kstFormat("yyMMdd").format(Date())}.txt")
 
-            // [수정] 로그 파일명 날짜 포맷도 yyMMdd로 통일 (예: app_debug_log_260319.txt)
-            val dateStr = kstFormat("yyMMdd").format(Date())
-            val fileName = "app_debug_log_${dateStr}.txt"
-            val logFile = File(logDir, fileName)
-
-            FileWriter(logFile, true).buffered().use { writer ->
-                writer.appendLine("[$timestamp] $message")
+            try {
+                flushPending(logFile)
+            } catch (e: Exception) {
+                // 수동 삭제 등으로 인한 색인 desync(EEXIST) 복구: 손상 핸들 제거 후 재시도.
+                val msg = (e.message ?: "") + (e.cause?.message ?: "")
+                if (msg.contains("EEXIST")) {
+                    runCatching { logFile.delete() }
+                    flushPending(logFile) // 재시도 실패 시 아래 catch로
+                } else {
+                    throw e
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "CRITICAL: Log file write failed: ${e.message}", e)
+            // 메모리 무한 증가 방지: 오래된 줄부터 버림
+            while (pendingLogs.size > MAX_PENDING) pendingLogs.removeFirst()
         }
+    }
+
+    // pendingLogs를 파일에 append하고 성공 시 비운다. 실패하면 예외를 던져 호출부가 복구하도록 한다.
+    private fun flushPending(logFile: File) {
+        FileWriter(logFile, true).buffered().use { writer ->
+            for (line in pendingLogs) writer.appendLine(line)
+        }
+        pendingLogs.clear()
     }
 
     fun getDownloadPath(): File {

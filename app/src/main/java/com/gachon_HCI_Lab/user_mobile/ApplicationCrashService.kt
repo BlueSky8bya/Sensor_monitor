@@ -15,9 +15,6 @@ class ApplicationCrashService : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // 로그 저장용 앱 컨텍스트 주입 (getExternalFilesDir 사용).
-        com.gachon_HCI_Lab.user_mobile.common.CsvController.init(this)
-
         // 글로벌 예외 처리기 설정
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             // 강제 종료 이유 기록
