@@ -10,9 +10,18 @@ import java.io.*
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 object CsvController {
     private const val TAG = "CsvController"
+
+    // 로그/파일명 시각은 기기 시간대와 무관하게 항상 한국시간(KST)으로 기록.
+    // 주의: 서버 전송 timestamp는 epoch(System.currentTimeMillis)라 시간대 영향 없음 — 별개.
+    val KST: TimeZone = TimeZone.getTimeZone("Asia/Seoul")
+
+    // KST 고정 SimpleDateFormat 생성 헬퍼.
+    fun kstFormat(pattern: String): SimpleDateFormat =
+        SimpleDateFormat(pattern, Locale.getDefault()).apply { timeZone = KST }
 
     /**
      * 앱의 주요 이벤트나 에러를 파일로 남기는 함수
@@ -30,11 +39,11 @@ object CsvController {
                 }
             }
 
-            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+            val sdf = kstFormat("yyyy-MM-dd HH:mm:ss")
             val timestamp = sdf.format(Date())
 
             // [수정] 로그 파일명 날짜 포맷도 yyMMdd로 통일 (예: app_debug_log_260319.txt)
-            val dateStr = SimpleDateFormat("yyMMdd", Locale.getDefault()).format(Date())
+            val dateStr = kstFormat("yyMMdd").format(Date())
             val fileName = "app_debug_log_${dateStr}.txt"
             val logFile = File(logDir, fileName)
 
@@ -70,7 +79,7 @@ object CsvController {
      * (예: Accelerometer_260319_204501.csv)
      */
     private fun setFileName(sensorName: String): String {
-        val sdf = SimpleDateFormat("yyMMdd_HHmmss", Locale.getDefault())
+        val sdf = kstFormat("yyMMdd_HHmmss")
         val date = sdf.format(Date())
         return "${sensorName}_${date}.csv"
     }
