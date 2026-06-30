@@ -1,5 +1,6 @@
 package com.gachon_HCI_Lab.user_mobile.common
 
+import android.content.Context
 import android.os.Environment
 import android.util.Log
 import com.gachon_HCI_Lab.user_mobile.sensor.model.AbstractSensor
@@ -15,6 +16,14 @@ import java.util.TimeZone
 object CsvController {
     private const val TAG = "CsvController"
 
+    // 앱 컨텍스트. 로그를 앱 전용 외부저장(getExternalFilesDir)에 쓰기 위해 필요.
+    // ApplicationCrashService.onCreate()에서 init()으로 주입한다.
+    private var appContext: Context? = null
+
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
+
     // 로그/파일명 시각은 기기 시간대와 무관하게 항상 한국시간(KST)으로 기록.
     // 주의: 서버 전송 timestamp는 epoch(System.currentTimeMillis)라 시간대 영향 없음 — 별개.
     val KST: TimeZone = TimeZone.getTimeZone("Asia/Seoul")
@@ -28,8 +37,11 @@ object CsvController {
      */
     fun writeLog(message: String) {
         try {
-            val basePath = getDownloadPath()
-            val logDir = File(basePath, "sensor_data/logs")
+            // 로그는 앱 전용 외부저장(/Android/data/<pkg>/files/logs)에 저장.
+            // MediaStore 색인을 타지 않아 수동 폴더 삭제로 인한 색인 desync/EEXIST가 없다.
+            // appContext 미주입(초기화 전) 시에만 기존 Download 경로로 폴백.
+            val base = appContext?.getExternalFilesDir(null) ?: getDownloadPath()
+            val logDir = File(base, "logs")
 
             if (!logDir.exists()) {
                 val created = logDir.mkdirs()
